@@ -1,7 +1,14 @@
-from fastapi import FastAPI
+from dotenv import load_dotenv
+load_dotenv()
+
+import logging
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from backend.routers import interaction
 from backend.cache.sqlite import init_db
+
+logger = logging.getLogger("ddi_checker")
 
 app = FastAPI(
     title="Drug-Drug Interaction Checker",
@@ -11,10 +18,27 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:4127"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Last-resort logging for truly unexpected errors.
+
+    NOTE: Starlette routes any handler registered for the bare `Exception`
+    class through ServerErrorMiddleware, which sits *outside* CORSMiddleware
+    — so this response will never carry CORS headers, and the browser will
+    still report a generic "Failed to fetch" for cross-origin requests. This
+    only makes the server-side log readable; it does not fix the CORS gap.
+    Known failure points (RxNorm/RxNav/OpenFDA/LLM calls) are caught in
+    backend/routers/interaction.py and re-raised as HTTPException instead,
+    which *does* stay inside the CORS-wrapped middleware chain — that's the
+    real fix. This handler is only a safety net for anything unanticipated.
+    """
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 @app.on_event("startup")
 def on_startup():

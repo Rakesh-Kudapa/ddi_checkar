@@ -17,6 +17,10 @@ node_modules/
 .next/
 out/
 
+# Logs / build artifacts
+*.log
+*.tsbuildinfo
+
 # OS
 .DS_Store
 Thumbs.db

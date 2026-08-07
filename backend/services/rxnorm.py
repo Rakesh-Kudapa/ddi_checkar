@@ -33,15 +33,32 @@ async def resolve(drug_name: str) -> DrugResolved:
     return DrugResolved(name=drug_name, rxcui=rxcui, standard_name=standard_name)
 
 async def autocomplete(query: str) -> list[str]:
-    """Return up to 8 drug name suggestions."""
+    """Return up to 8 drug name suggestions.
+
+    Uses approximateTerm rather than spellingsuggestions: the latter only
+    corrects near-miss typos of a complete word and returns nothing for the
+    partial prefixes a user types while typing (e.g. "warf" -> no match,
+    "warfarn" -> "warfarin").
+    """
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
-            f"{RXNORM_BASE}/spellingsuggestions.json",
-            params={"name": query}
+            f"{RXNORM_BASE}/approximateTerm.json",
+            params={"term": query, "maxEntries": 20}
         )
         resp.raise_for_status()
         data = resp.json()
 
-    return data.get("suggestionGroup", {}).get(
-        "suggestionList", {}
-    ).get("suggestion", [])[:8]
+    candidates = data.get("approximateGroup", {}).get("candidate", [])
+
+    seen = set()
+    suggestions = []
+    for c in candidates:
+        name = c.get("name")
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        suggestions.append(name)
+        if len(suggestions) == 8:
+            break
+
+    return suggestions

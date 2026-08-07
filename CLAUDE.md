@@ -30,9 +30,9 @@ User input (drug names)
 | API | Purpose | Base URL |
 |-----|---------|----------|
 | RxNorm (NLM) | Drug name → RxCUI ID | https://rxnav.nlm.nih.gov/REST/rxcui.json |
-| RxNav Interaction | DDI severity + description | https://rxnav.nlm.nih.gov/REST/interaction/list.json |
+| RxNav Interaction ⚠️ RETIRED | ~~DDI severity + description~~ NLM discontinued this API (2024) — see docs/api_notes.md | https://rxnav.nlm.nih.gov/REST/interaction/list.json |
 | OpenFDA | Drug label interaction text | https://api.fda.gov/drug/label.json |
-| Claude API | LLM synthesis | claude-sonnet-4-6 |
+| LLM (user's choice) | Synthesis — Anthropic, Gemini, or Grok, key entered in-UI | see docs/api_notes.md |
 
 ## Risk Scoring
 - **Low** — no clinically significant interaction found
@@ -90,7 +90,7 @@ ddi-checker/
 
 ## v2 Scope (after v1 works)
 - [ ] Multi-drug panel (3+ drugs, all pairwise combinations)
-- [ ] DrugBank integration for deeper mechanism data
+- [ ] Replace retired RxNav Interaction API with a real structured DDI source (licensed DrugBank API, or another provider) — v1 currently relies on OpenFDA label text + the LLM's own training knowledge only, with no independently-verified structured severity data
 - [ ] Adverse events overlay from OpenFDA FAERS
 - [ ] Adverse events add-on (connect to your existing pipeline)
 
@@ -101,15 +101,16 @@ ddi-checker/
 ## Key Decisions
 - **No auth on v1** — keep it simple, add API key gating in v2
 - **Cache RxCUI lookups in SQLite** — RxNorm calls are slow, cache aggressively
-- **Claude model** — use claude-sonnet-4-6 for synthesis (fast + cheap)
+- **LLM keys are user-supplied, in-UI, per-request** — user picks Anthropic/Gemini/Grok and pastes their own key in the Settings panel; it's stored only in browser localStorage and forwarded per-request to the backend, which never persists it. Lets each user bring their own billing without an env-level secret.
+- **Data-source keys stay server-side config** — RxNorm/RxNav need no key ever; OpenFDA's optional key lives in `.env` (gitignored) for higher rate limits, never in source.
 - **Disclaimer** — always shown in UI, never omit
 - **Rate limits** — RxNav: 20 req/sec, OpenFDA: 240 req/min (no key), 1000/min (with key)
 
 ## Environment Variables
 ```
-ANTHROPIC_API_KEY=your_key_here
-OPENFDA_API_KEY=optional_for_higher_rate_limits
+OPENFDA_API_KEY=          # optional, raises OpenFDA rate limit to 1000/min
 ```
+LLM provider API keys are entered in the frontend Settings panel, not via env vars.
 
 ## Disclaimer (always include in UI)
 "This tool is for research and informational purposes only.
