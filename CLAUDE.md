@@ -30,9 +30,7 @@ An LLM-powered drug-drug interaction (DDI) checker that:
 Researchers, pharmacologists, and clinical informaticists — not end patients.
 Always show data sources and include a disclaimer that output is informational only.
 (A daily-use pharmacologist reviewer rated the current build 8/10 as a "first-pass triage
-tool" — see project memory for the full review. Biggest remaining ask: when verified
-severity and the AI's own risk assessment disagree, the UI doesn't yet call that out
-explicitly.)
+tool" — see "Next Up" below for the three concrete gaps that review surfaced.)
 
 ## Verification Tiers (the core architectural idea — read this before adding features)
 
@@ -52,6 +50,60 @@ Coverage for Tier 1 sources is **real but inconsistent** — e.g. ChEMBL has asp
 mechanism but not warfarin's, even though warfarin's target (VKORC1) exists in ChEMBL
 independently. An empty Tier 1 result means "this source doesn't have it," never "no
 mechanism/interaction exists." This absence is always shown honestly, not hidden.
+
+## Next Up — prioritized from the last user review (pick up here)
+
+A daily-use pharmacologist reviewer evaluated the build and rated it 8/10, with three
+concrete, unresolved gaps — in priority order, this is what the next session should build.
+(Two other items from that same review — the free-tier LLM rate limit and history
+resetting on redeploy — were explicitly set aside by the user as accepted, deliberate
+tradeoffs, not open work. Don't "fix" those without being asked again.)
+
+### 1. Severity reconciliation (top priority)
+When DDInter's `verified_severity.level` (Major/Moderate/Minor/Unknown) and the AI's own
+`risk_level` (high/moderate/low/unknown) land on different severity tiers, the UI
+currently shows both side by side with no guidance on which to trust or why they might
+differ. Needed:
+- A normalization mapping between the two scales (Major≈high, Moderate≈moderate,
+  Minor≈low) to detect agreement vs. disagreement programmatically — doesn't exist yet;
+  `backend/models/schemas.py` and `frontend/components/checker/ResultCard.tsx` currently
+  just display both fields independently with no comparison logic.
+- When they disagree, say so explicitly and explain *why* they can differ (DDInter is a
+  fixed literature-curated rating; the AI's assessment can incorporate this specific
+  pair's OpenFDA label text and any patient context) — don't just show two numbers and
+  let the user guess which one matters.
+- Decide, and document as a stated policy (not an implicit default), which one the UI
+  should visually lead with when they conflict.
+
+### 2. Severity → clinical action mapping
+DDInter's severity label is a research classification, not a clinical action (unlike
+Lexicomp's "Avoid combination" / "Monitor therapy" / "Consider therapy modification"
+categories) — the user currently has to translate severity into action themselves. Two
+directions, not yet decided between:
+- **(a) A generic, clearly-labeled convention** (Major → typically avoid/requires
+  clinical intervention, Moderate → monitor/consider adjustment, Minor → minimal
+  significance) — easy to add, but must be labeled as a general convention, not a
+  per-pair verified recommendation, to preserve the Tier 1/Tier 2 honesty rule above.
+- **(b) A genuine per-pair management/action source.** DDInter's own live per-pair pages
+  do have a "Management" field (seen in their internal AJAX response while investigating
+  — see docs/api_notes.md's DDInter section) — but that's on their live app, not in the
+  bulk CSV download this project already ingests, and pursuing it re-raises the same
+  don't-hit-their-private-endpoint concern already resolved once for severity (see Key
+  Decisions). Real per-pair management text would need DDInter publishing it in
+  downloadable form, or a different (likely commercial/licensed) source.
+
+### 3. Data vintage / citation dates
+No source currently exposes *when* its data was retrieved, which matters if a user cites
+a result in a chart note or paper. Groundwork already exists but isn't surfaced:
+- `rxcui_cache`, `pubchem_cache`, `chembl_cache` all already have a `cached_at TIMESTAMP
+  DEFAULT CURRENT_TIMESTAMP` column (`backend/cache/sqlite.py`), populated on every
+  first-lookup — just never read back out to the API response or UI.
+- DDInter's bundle date is documented in `backend/data/ddinter/README.md` ("Downloaded
+  2026-08-08") but is a static fact about the whole dataset, not per-request — surface it
+  as a fixed citation line, not something to look up per query.
+- Needed: expose retrieval timestamps in the relevant API response models
+  (`VerifiedMechanism`, `VerifiedSeverity`, `DrugInfoResult`), show them in the Sources
+  tab and in the PDF/Word exports alongside each citation.
 
 ## Architecture
 ```
@@ -96,8 +148,8 @@ User input (drug names, optional patient context)
 
 This is the AI's (Tier 2) assessment. `verified_severity` (Tier 1, DDInter) is a *separate*
 field shown alongside it — they are not merged into one number, and the UI does not yet
-explain what to do if they disagree (see "Intended Users" note above — this is the leading
-known UX gap).
+explain what to do if they disagree, nor translate either into a concrete clinical action.
+See "Next Up" above (items 1 and 2) — this is the current top priority.
 
 ## Folder Structure (actual, as of 2026-08-08)
 ```
@@ -163,7 +215,7 @@ ddi-checker/
 - [x] PDF/Word/CSV report export
 - [x] Patient context (age/renal/hepatic/pregnancy/other conditions) — stays Tier 2
 - [ ] Adverse events overlay from OpenFDA FAERS — not started
-- [ ] Severity/AI-risk reconciliation UX (see "Risk Scoring" above) — not started, currently the top user-facing gap
+- [ ] Severity/AI-risk reconciliation, severity→action mapping, data vintage — see "Next Up" above, this is the current priority
 
 ## v3 Scope (future)
 - [ ] Target → Drug triage integration (connect to SNP dashboard)
