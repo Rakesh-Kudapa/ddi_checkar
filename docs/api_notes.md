@@ -53,3 +53,94 @@
 - Gemini returns HTTP 400 (not 401/403) for a malformed/invalid API key,
   with `"API key not valid"` in the body — `llm.py`'s `_call_gemini`
   checks for that substring to still classify it as `LLMAuthError`.
+- All three providers (Anthropic, Gemini, xAI) nest their error detail
+  under `error.message` in the response body — `_extract_error_message()`
+  in `llm.py` reads that generically, with a raw-text fallback. A 429 from
+  any provider surfaces as `LLMRateLimitError` → HTTP 429, carrying the
+  provider's own message (e.g. Gemini's free tier: 20 requests/day/model —
+  genuinely that low, not a bug in our handling).
+
+## RxClass (drug classification)
+- Base: `https://rxnav.nlm.nih.gov/REST/rxclass`, no key needed
+- `class/byRxcui.json` mixes real classification with disease/indication
+  data — a `classType: "DISEASE"` entry (e.g. "Pregnancy", "Atrial
+  Fibrillation" for warfarin, via `rela: ci_with/may_treat/may_prevent`) is
+  a contraindication/indication association, not a drug class. Showing
+  these as "drug class" would be misleading.
+- `backend/services/rxclass.py` whitelists `classType` in
+  `{ATC1-4, EPC, MOA, PE, VA, STRUCT, PK}` — the genuine classification
+  types — and drops everything else.
+
+## PubChem (2D structure + synonyms)
+- Base: `https://pubchem.ncbi.nlm.nih.gov/rest/pug`, no key needed
+- **Requesting the property named `CanonicalSMILES` does NOT return a
+  `CanonicalSMILES` key** — PubChem silently relabels it `ConnectivitySMILES`
+  (topology only, no stereochemistry) in the response. Requesting `SMILES`
+  (the modern name for the old `IsomericSMILES`) is what actually comes
+  back keyed `SMILES` and includes full stereochemistry. Verified
+  empirically by comparing both requests side by side, not from docs —
+  this is genuinely surprising API behavior.
+- `compound/name/{name}/synonyms/JSON` returns up to hundreds of alternate
+  names (brand names, INN/chemical names, CAS numbers) — `pubchem.py`'s
+  `get_synonyms()` caps at 15, front-loaded by PubChem's own relevance
+  ordering. Used as a fallback when another name-keyed source (DDInter)
+  doesn't match the primary RxNorm-resolved name.
+- Both endpoints return 404 for an unmatched name — treated as "no data"
+  (`None`/`[]`), not an error, matching every other service's convention.
+
+## ChEMBL (verified mechanism, Tier 1)
+- Base: `https://www.ebi.ac.uk/chembl/api/data`, no key needed
+- Flow: `molecule/search?q={name}` → take the first result's
+  `molecule_hierarchy.parent_chembl_id` (not `molecule_chembl_id` — a salt
+  form like "warfarin sodium" has its own `molecule_chembl_id` but shares
+  the base compound's `parent_chembl_id`, and only the parent tends to have
+  curated mechanism data) → `mechanism?molecule_chembl_id={parent_id}` →
+  for each entry, resolve `target_chembl_id` via `target/{id}` for the
+  human-readable name.
+- **Coverage is real but inconsistent** — aspirin has a citable entry
+  (target "Cyclooxygenase", real PubMed references); warfarin has zero
+  entries in the `mechanism` endpoint, despite its target VKORC1 existing
+  independently in ChEMBL as `CHEMBL1930`. An empty result is expected and
+  common, not a bug — never treat it as "this drug has no mechanism."
+- `mechanism_refs` gives real citations (`ref_type`: PubMed/Wikipedia/etc.,
+  `ref_url`) — this is what makes this source usable as a Tier 1 citation
+  rather than just another API call.
+
+## DDInter 2.0 (verified severity, Tier 1)
+- Not a live API integration — see `backend/data/ddinter/README.md` for
+  full provenance. Bundled as 8 static CSVs (by ATC code: A/B/D/H/L/P/R/V,
+  ~222k curated drug-pair severity ratings total), downloaded once from
+  DDInter's own published `/download/` page, ingested into a local SQLite
+  table (`ddinter_reference`) at backend startup.
+- **Deliberately not built against DDInter's internal AJAX endpoint**
+  (`/ddinter/checker/`, found while investigating their site) — that's
+  their private web app's backend, not a published interface. Hitting it
+  per-user-request would hammer their infrastructure regardless of the
+  data's license terms.
+- License: **CC BY-NC-SA 4.0** — compatible with this non-commercial
+  research tool, but requires attribution wherever the data is shown
+  (already wired into the UI, PDF/Word exports, and CSV export).
+- **DDInter's canonical drug names sometimes differ from RxNorm's** — e.g.
+  DDInter uses "Acetylsalicylic acid" where RxNorm/this app resolve to
+  "Aspirin". Exact-name lookup alone misses these (confirmed: warfarin +
+  aspirin returned nothing on exact match, despite DDInter rating it
+  "Major"). Fixed by falling back to PubChem's synonym list
+  (`get_verified_severity` tried against every synonym combination,
+  capped at 15×15) when the exact match fails — this is a general fix, not
+  a hardcoded aspirin special-case, and should catch other brand/generic/
+  INN naming mismatches too.
+- Lookup is symmetric (tries both `(a,b)` and `(b,a)` orderings) since
+  DDInter's CSV column order (`Drug_A`/`Drug_B`) is arbitrary, not
+  semantically directional.
+- Only severity level is in the bulk download — the mechanism/management
+  text visible on DDInter's own live per-pair pages isn't included.
+
+## RDKit.js (client-side molecule rendering)
+- Loaded via a lazily-injected `<script src="https://unpkg.com/@rdkit/rdkit/dist/RDKit_minimal.js">`
+  (`frontend/lib/useRdkit.ts`), **not** an npm dependency — avoids a
+  multi-MB WASM payload in every page load and the custom webpack config
+  RDKit.js's own docs say npm/bundler usage requires. Only loads when a
+  user actually opens a Structures tab.
+- API: `window.initRDKitModule()` → `rdkit.get_mol(smiles).get_svg(w, h)`.
+  Must call `mol.delete()` after use (WASM memory isn't garbage collected
+  by JS).
