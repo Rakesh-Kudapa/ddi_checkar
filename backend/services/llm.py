@@ -9,6 +9,16 @@ SYSTEM_PROMPT = """You are a clinical pharmacology assistant.
 Given structured drug interaction data from RxNav and FDA drug labels,
 produce a clear, accurate summary for a researcher or clinician.
 Be factual. Never speculate beyond the data provided.
+In "recommendation", do not invent specific numeric doses, dose adjustments,
+or monitoring intervals (e.g. a specific mg amount or "check INR every N days")
+unless that exact figure appears in the FDA label text given to you — numeric
+dosing is exactly the kind of specific, actionable claim a clinician might act
+on without double-checking, and is also where an LLM is most likely to
+hallucinate a plausible-sounding but unsupported number. Prefer qualitative
+guidance instead (e.g. "use the lowest effective dose," "monitor more
+frequently," "adjust per current prescribing information") and say
+explicitly when a numeric value should be verified against current
+prescribing information rather than taken from this output.
 Output must be valid JSON only — no preamble, no markdown fences."""
 
 # Model IDs per provider. Prefer a provider's "-latest" alias where one
@@ -131,6 +141,16 @@ async def _request_and_parse(provider: LLMProvider, api_key: str, prompt: str) -
         return json.loads(raw_retry)
 
 
+def _openfda_citation_url(standard_name: str, matched_field: str | None) -> str:
+    """Builds a citation URL that actually reproduces the OpenFDA match —
+    using generic_name unconditionally regardless of which field actually
+    matched (e.g. openfda.brand_name for a brand-entered drug like Lipitor)
+    would give a link that returns nothing when clicked."""
+    field = matched_field or "openfda.generic_name"
+    value = standard_name if field == "openfda.generic_name" else standard_name.upper()
+    return f'https://api.fda.gov/drug/label.json?search={field}:"{value}"'
+
+
 async def synthesize(
     drug_a: DrugResolved,
     drug_b: DrugResolved,
@@ -140,6 +160,8 @@ async def synthesize(
     provider: LLMProvider,
     api_key: str,
     patient_context: PatientContext | None = None,
+    label_a_field: str | None = None,
+    label_b_field: str | None = None,
 ) -> InteractionResult:
     """Send all gathered data to the chosen LLM provider, return structured InteractionResult."""
 
@@ -214,12 +236,12 @@ Return a JSON object with exactly these fields:
     if label_a:
         sources.append(InteractionSource(
             name=f"OpenFDA label — {drug_a.standard_name}",
-            url=f'https://api.fda.gov/drug/label.json?search=openfda.generic_name:"{drug_a.standard_name}"'
+            url=_openfda_citation_url(drug_a.standard_name, label_a_field)
         ))
     if label_b:
         sources.append(InteractionSource(
             name=f"OpenFDA label — {drug_b.standard_name}",
-            url=f'https://api.fda.gov/drug/label.json?search=openfda.generic_name:"{drug_b.standard_name}"'
+            url=_openfda_citation_url(drug_b.standard_name, label_b_field)
         ))
 
     try:

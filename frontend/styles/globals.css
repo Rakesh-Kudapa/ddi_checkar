@@ -51,7 +51,7 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-si
 .ac-drop-close{border:none;background:none;color:var(--muted);cursor:pointer;font-size:12px;line-height:1;padding:2px 4px}
 .ac-drop-close:hover{color:var(--danger)}
 .ac-opt{padding:8px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:8px}
-.ac-opt:hover{background:var(--light)}
+.ac-opt:hover,.ac-opt.hl{background:var(--light)}
 .check-btn{background:linear-gradient(135deg,#4f6ef7,#7c3aed);color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;font-family:var(--sans);transition:opacity .15s}
 .check-btn:hover{opacity:.88}
 .check-btn:disabled{opacity:.5;cursor:not-allowed}

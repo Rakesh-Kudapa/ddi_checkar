@@ -29,8 +29,12 @@ An LLM-powered drug-drug interaction (DDI) checker that:
 ## Intended Users
 Researchers, pharmacologists, and clinical informaticists — not end patients.
 Always show data sources and include a disclaimer that output is informational only.
-(A daily-use pharmacologist reviewer rated the current build 8/10 as a "first-pass triage
-tool" — see "Next Up" below for the three concrete gaps that review surfaced.)
+(A daily-use pharmacologist reviewer rated the first review cycle 8/10 — see "Next Up"
+below for that cycle's three gaps, now done. A second review cycle, done as a daily-use
+*scientist* rather than a pharmacologist, found and fixed a further round of correctness
+bugs and workflow friction — see "Second Review Cycle" below. Re-rated **8.5/10** after
+those fixes — up from an interim 7/10 mid-cycle once the two silent correctness bugs were
+found but not yet fixed.)
 
 ## Verification Tiers (the core architectural idea — read this before adding features)
 
@@ -54,56 +58,160 @@ mechanism/interaction exists." This absence is always shown honestly, not hidden
 ## Next Up — prioritized from the last user review (pick up here)
 
 A daily-use pharmacologist reviewer evaluated the build and rated it 8/10, with three
-concrete, unresolved gaps — in priority order, this is what the next session should build.
+concrete, unresolved gaps. **All three are now done** (2026-08-08) — this section is kept
+as a record of what was built and why, not an open task list. Check with the user before
+starting new work here; there is no known next gap from this review cycle.
 (Two other items from that same review — the free-tier LLM rate limit and history
 resetting on redeploy — were explicitly set aside by the user as accepted, deliberate
 tradeoffs, not open work. Don't "fix" those without being asked again.)
 
-### 1. Severity reconciliation (top priority)
-When DDInter's `verified_severity.level` (Major/Moderate/Minor/Unknown) and the AI's own
-`risk_level` (high/moderate/low/unknown) land on different severity tiers, the UI
-currently shows both side by side with no guidance on which to trust or why they might
-differ. Needed:
-- A normalization mapping between the two scales (Major≈high, Moderate≈moderate,
-  Minor≈low) to detect agreement vs. disagreement programmatically — doesn't exist yet;
-  `backend/models/schemas.py` and `frontend/components/checker/ResultCard.tsx` currently
-  just display both fields independently with no comparison logic.
-- When they disagree, say so explicitly and explain *why* they can differ (DDInter is a
-  fixed literature-curated rating; the AI's assessment can incorporate this specific
-  pair's OpenFDA label text and any patient context) — don't just show two numbers and
-  let the user guess which one matters.
-- Decide, and document as a stated policy (not an implicit default), which one the UI
-  should visually lead with when they conflict.
+### 1. Severity reconciliation — done (2026-08-08)
+`backend/services/severity.py` normalizes DDInter's `Major/Moderate/Minor/Unknown` onto
+the AI's `high/moderate/low/unknown` scale and detects agreement vs. disagreement. Result:
+`InteractionResult.severity_comparison` (`SeverityComparison` in `schemas.py`) —
+`agrees`, `verified_normalized`, `ai_risk_level`, `display_level`, `display_source`,
+`explanation`. Populated in `run_check()` in `backend/routers/interaction.py` right after
+`verified_severity` is attached; persisted in the `history` table
+(`severity_comparison_json`, with a startup migration in `cache/sqlite.py` for DBs created
+before this column existed).
 
-### 2. Severity → clinical action mapping
-DDInter's severity label is a research classification, not a clinical action (unlike
-Lexicomp's "Avoid combination" / "Monitor therapy" / "Consider therapy modification"
-categories) — the user currently has to translate severity into action themselves. Two
-directions, not yet decided between:
-- **(a) A generic, clearly-labeled convention** (Major → typically avoid/requires
-  clinical intervention, Moderate → monitor/consider adjustment, Minor → minimal
-  significance) — easy to add, but must be labeled as a general convention, not a
-  per-pair verified recommendation, to preserve the Tier 1/Tier 2 honesty rule above.
-- **(b) A genuine per-pair management/action source.** DDInter's own live per-pair pages
-  do have a "Management" field (seen in their internal AJAX response while investigating
-  — see docs/api_notes.md's DDInter section) — but that's on their live app, not in the
-  bulk CSV download this project already ingests, and pursuing it re-raises the same
-  don't-hit-their-private-endpoint concern already resolved once for severity (see Key
-  Decisions). Real per-pair management text would need DDInter publishing it in
-  downloadable form, or a different (likely commercial/licensed) source.
+**Stated policy (confirmed with the user): when the two disagree, the UI leads with
+whichever is more severe** ("most severe wins" — the standard err-toward-caution
+convention in clinical decision support), not with whichever source is "trusted." Both
+values stay visible underneath with an explanation of why they can differ. Wired into:
+`ResultCard.tsx`'s header badge/color and Summary tab explanation banner,
+`MultiDrugPanel.tsx`'s matrix cell colors/counts (`headlineOf()`), CSV export, and both
+PDF/Word exports (`reportgen.py`). `severity_comparison` is `null` — not computed — when
+no verified severity exists at all; that case is unchanged from before (AI-assessed-only,
+no comparison to make).
 
-### 3. Data vintage / citation dates
-No source currently exposes *when* its data was retrieved, which matters if a user cites
-a result in a chart note or paper. Groundwork already exists but isn't surfaced:
-- `rxcui_cache`, `pubchem_cache`, `chembl_cache` all already have a `cached_at TIMESTAMP
-  DEFAULT CURRENT_TIMESTAMP` column (`backend/cache/sqlite.py`), populated on every
-  first-lookup — just never read back out to the API response or UI.
-- DDInter's bundle date is documented in `backend/data/ddinter/README.md` ("Downloaded
-  2026-08-08") but is a static fact about the whole dataset, not per-request — surface it
-  as a fixed citation line, not something to look up per query.
-- Needed: expose retrieval timestamps in the relevant API response models
-  (`VerifiedMechanism`, `VerifiedSeverity`, `DrugInfoResult`), show them in the Sources
-  tab and in the PDF/Word exports alongside each citation.
+### 2. Severity → clinical action mapping — done (2026-08-08)
+Went with **(a)**, the generic convention — **(b)**, a genuine per-pair management source,
+stayed out of reach: DDInter's bulk CSV download has no management field, and their live
+per-pair pages' "Management" field is only visible via their internal AJAX endpoint, which
+this project deliberately doesn't call (see docs/api_notes.md's DDInter section; same
+don't-hit-their-private-endpoint reasoning as for severity, see Key Decisions).
+
+`backend/services/severity.py`'s `_ACTION_CONVENTION` dict maps DDInter's `Major/Moderate/
+Minor` to a label + description (no entry for `Unknown` — don't guess an action for an
+unknown rating). New `ActionConvention` model (`schemas.py`): `action`, `description`,
+`basis` (always states it's a general convention, not per-pair verified, not AI-generated
+— this is a **third, distinct category** alongside Tier 1/Tier 2, not a member of either).
+`InteractionResult.action_convention` / `HistoryDetail.action_convention`, populated via
+`severity.action_convention_for(verified_severity)` in `run_check()`, `null` whenever no
+verified severity exists (nothing to convert). Wired into: `ResultCard.tsx`'s Clinical tab
+(shown alongside, and visually distinct from, the AI's own `recommendation`), CSV export,
+and both PDF/Word exports. Persisted in `history.action_convention_json` (migrated column).
+
+### 3. Data vintage / citation dates — done (2026-08-08)
+`rxcui_cache`, `pubchem_cache`, `chembl_cache`'s existing `cached_at` columns are now
+written explicitly (`backend/cache/sqlite.py`'s `_now()`, called from `set_cached_rxcui`/
+`set_cached_structure`/`set_cached_chembl`, each now returning the timestamp just written)
+and read back out through the service layer: `rxnorm.resolve()` → `DrugResolved.resolved_at`,
+`pubchem.get_structure()` → `DrugResolved.structure_retrieved_at` (`cached_at` key on the
+returned dict), `chembl.get_verified_mechanisms()` → `VerifiedMechanism.retrieved_at` (via
+`_with_retrieved_at()` — one timestamp per drug, since `chembl_cache` stores one row per
+drug, stamped onto every mechanism in that drug's list). DDInter's dataset date is a fixed
+constant (`schemas.py`'s `DDINTER_DATASET_DATE = "2026-08-08"`, matching
+`backend/data/ddinter/README.md`) on `VerifiedSeverity.dataset_date` — a per-dataset fact,
+not a per-request lookup, per the original plan here.
+
+Surfaced in: `ResultCard.tsx`'s Sources tab ("Data vintage" section) and `DrugInfoPanel.tsx`
+(RxCUI resolved / structure retrieved rows), both PDF/Word exports (`reportgen.py`'s
+`_data_vintage_lines()`, one shared helper for both formats), and `VerifiedMechanismCard.tsx`
+(a small "Retrieved from ChEMBL: ..." line per mechanism). `history` table gained
+`resolved_at_a/b`, `structure_at_a/b` columns (migrated) so History detail view round-trips
+these too. Pre-existing history rows and cache entries read back `null`/no vintage line for
+data cached before this change — expected, not a bug (there's no retroactive timestamp to
+recover).
+
+## Second Review Cycle (2026-08-08, later session) — a "use this daily" pass, all fixed
+
+Reviewed as a scientist who'd use this tool as their *primary* daily interaction-checking
+tool, not a one-off audit. Two of the findings were silent correctness bugs — the kind
+that produce a plausible-looking wrong or degraded answer with no visible sign anything's
+off, which is worse than a loud failure in a tool whose whole premise is honest data
+provenance. Everything below is done; treat this as a record, not open work.
+
+**Correctness/trust bugs:**
+- **Patient context silently leaked across unrelated checks.** `PairChecker.tsx`'s
+  seed-driven effect (reopening a History item, a Sidebar quick-pair, a Multi-drug
+  "+ Multi-drug" jump) reset drug names but never patient context — so age/renal/hepatic/
+  pregnancy data entered for one check silently rode along into the next, unrelated one,
+  invisibly if the context panel was collapsed. Fixed: the effect now restores
+  `patient_context_used` from a loaded result, or clears to empty for a fresh quick-pair.
+  Same bug existed in `MultiDrugPanel.tsx`, fixed the same way. `PatientContextForm.tsx`
+  also now shows a one-line "Currently set: ..." summary even while collapsed, so a
+  lingering value is never invisible again.
+- **Brand-name drugs silently lost all OpenFDA label data.** Verified empirically:
+  `atorvastatin` returned a full label-interaction excerpt; `Lipitor` (same drug) returned
+  "No FDA label data found." Same for Tylenol vs. acetaminophen. Cause:
+  `openfda.get_label_interactions()` only tried `generic_name`/`substance_name`, never
+  `brand_name` — and RxNorm sometimes resolves a brand name to itself rather than
+  expanding it to the generic ingredient, so this wasn't a rare edge case. Fixed by adding
+  `openfda.brand_name` as a third fallback field; the function now returns
+  `(text, matched_field)` so `llm.py`'s citation URL reproduces whatever field actually
+  matched instead of always assuming `generic_name` (which would've been a dead link for
+  a brand-name match). See docs/api_notes.md's OpenFDA section. Some brands (confirmed:
+  Tylenol) genuinely have no `drug_interactions` section even under `brand_name` — that's
+  a real data gap, shown honestly, not a bug.
+- **LLM could state unhedged, specific numeric doses** (e.g. a real historical result said
+  "use low-dose aspirin (81 mg)") with nothing in the prompt discouraging it. `llm.py`'s
+  `SYSTEM_PROMPT` now explicitly forbids inventing specific doses/intervals not present in
+  the FDA label text given to it, and asks for qualitative guidance plus an explicit
+  "verify against current prescribing information" framing instead.
+- **Duplicate/self-pair wasn't blocked anywhere.** Confirmed via direct API call:
+  `POST /api/check-multi` with `["warfarin","warfarin","aspirin"]` sailed through to the
+  LLM step, wasting a call on a meaningless self-interaction. `/api/check` now rejects
+  `drug_a == drug_b` (case-insensitive) with 400; `/api/check-multi` case-insensitively
+  dedupes the drug list before generating pairs. Frontend: `PairChecker.tsx` blocks
+  same-drug submission with an inline message; `MultiDrugPanel.tsx`'s `addDrug()` dedup
+  check is now case-insensitive (previously exact-match only).
+
+**Workflow friction (all in the frontend):**
+- No Enter-to-submit anywhere in Pair Checker — `PairChecker.tsx`'s search card is now a
+  real `<form>`, so Enter in either drug field submits. `DrugInput.tsx` gained Up/Down
+  arrow-key navigation of suggestions and Enter-to-pick-the-highlighted-one (only
+  intercepting Enter when something's actually highlighted, so plain Enter still falls
+  through to the form submit).
+- Reopening a History item or clicking a Sidebar quick-pair used to silently overwrite
+  whatever was being typed. `PairChecker.tsx`'s seed effect now confirms first if there's
+  unsaved typed input that doesn't match the incoming seed.
+- **Reports/History were capped at a hardcoded 200/50 with zero indication** —
+  `ReportsPanel.tsx`/`HistoryList.tsx` would silently stop showing older entries. Backend's
+  `list_history()` now also returns a real `total` count (`HistoryListResult.total`); both
+  panels show "showing N of TOTAL" and a real "Load more" button instead of a silent
+  ceiling.
+- **TopBar/Settings data-source badges were hardcoded strings** ("OpenFDA: online") that
+  stayed "online" during an actual outage — the opposite of useful during the one moment a
+  status badge matters. New `GET /api/status` (`backend/services/status.py`) does a cheap
+  live reachability check per source (RxNorm/OpenFDA/PubChem/ChEMBL/DDInter-loaded);
+  `frontend/lib/useDataSourceStatus.ts` polls it every 60s. Confirmed working for real
+  during this session: OpenFDA had a genuine transient outage while testing, and the badge
+  correctly flipped to "unreachable" and back to "online" a minute later.
+- **"Raw data" tab was nearly empty** — just an explanatory note that RxNav is dead, no
+  actual data. Now shows the full `InteractionResult` as formatted, copyable JSON — real
+  audit value for a researcher checking exactly what fed a result, not a dead end.
+- Settings: switching LLM provider could silently discard an unsaved, un-Saved API key
+  typed for the current provider — `SettingsPanel.tsx`'s `handleProviderChange` now
+  confirms first if the draft key differs from what's actually saved.
+- `PatientContextForm.tsx`'s age field now clamps to `[0, 120]` instead of accepting any
+  number.
+- Reports CSV export ignored the row-selection checkboxes and always exported the whole
+  filtered list — `ReportsPanel.tsx`'s `exportCsv()` now exports the checked rows when any
+  are selected, the filtered list otherwise.
+
+**Re-rated 8.5/10 after these fixes** (up from an interim 7/10 once the two correctness
+bugs were identified but not yet fixed). What still caps it below a 9/10, honestly:
+verification here was API/code-level (unit calls, live curl/PowerShell checks, `tsc`,
+backend import) — nothing was clicked through in an actual browser, since no browser
+automation tool was available this session; a real click-through pass is still worth doing
+next time someone's in the UI. Also still true and unchanged: the severity→action mapping
+is a generic convention, not a genuine per-pair recommendation (see "Next Up" #2); Tier 1
+coverage (ChEMBL especially) is real but inconsistent, inherent to the data source; no
+FAERS adverse-event overlay yet; the 12-drug panel cap will occasionally bind for real
+polypharmacy cases. None of these are silent — all are disclosed in the UI or here — which
+is what separates them from the bugs this cycle fixed.
 
 ## Architecture
 ```
@@ -120,6 +228,8 @@ User input (drug names, optional patient context)
                              live API call (backend/data/ddinter/, cache/sqlite.py)
         → LLM API         — Anthropic/Gemini/Grok, user's own key, synthesis, Tier 2
                              (llm.py)
+        → GET /api/status — live per-source reachability check (status.py), polled by
+                             the frontend every 60s for the TopBar/Settings badges
     → Frontend (Next.js, pages router)
         — Interaction Checker tab: Pair check / Multi-drug panel (up to 12 drugs) / History
         — Reports tab: filterable table, CSV export, checkbox multi-delete
@@ -134,7 +244,7 @@ User input (drug names, optional patient context)
 |---|---|---|
 | RxNorm (NLM) | Drug name → RxCUI | ✅ Working, no key |
 | RxNav Interaction | ~~DDI severity~~ | ❌ **Permanently retired by NLM** (2024) — always 404s. See docs/api_notes.md |
-| OpenFDA | Drug label interaction text | ✅ Working — must search by `generic_name`/`substance_name`, **not** `rxcui` (that field matches per-product, not per-ingredient, and silently returns nothing) |
+| OpenFDA | Drug label interaction text | ✅ Working — searches `generic_name` → `substance_name` → `brand_name` in order, **not** `rxcui` (that field matches per-product, not per-ingredient) or `generic_name` alone (misses brand-name entries like "Lipitor"/"Tylenol") |
 | PubChem | CID, SMILES (2D structure), synonyms | ✅ Working, no key. Request property `SMILES`, not `CanonicalSMILES` (see docs/api_notes.md) |
 | ChEMBL | Verified mechanism + citations (Tier 1) | ✅ Working, no key. Coverage inconsistent — many drugs have no entry |
 | DDInter 2.0 | Verified severity (Tier 1) | ✅ Working — bundled dataset (`backend/data/ddinter/`), not a live call. CC BY-NC-SA 4.0, attribution required in UI/exports |
@@ -147,9 +257,10 @@ User input (drug names, optional patient context)
 - **High** — contraindicated or requires clinical intervention
 
 This is the AI's (Tier 2) assessment. `verified_severity` (Tier 1, DDInter) is a *separate*
-field shown alongside it — they are not merged into one number, and the UI does not yet
-explain what to do if they disagree, nor translate either into a concrete clinical action.
-See "Next Up" above (items 1 and 2) — this is the current top priority.
+field shown alongside it — they are never merged into one number. When they disagree, the
+UI now leads with whichever is more severe and explains why via `severity_comparison`
+(see "Next Up" #1, done). Still open: translating either into a concrete clinical action
+(see "Next Up" #2, current top priority).
 
 ## Folder Structure (actual, as of 2026-08-08)
 ```
@@ -172,7 +283,12 @@ ddi-checker/
 │   │   ├── chembl.py        ← verified mechanism (Tier 1)
 │   │   ├── rxclass.py       ← drug classification
 │   │   ├── llm.py           ← multi-provider synthesis (Tier 2), patient context prompt
-│   │   └── reportgen.py     ← PDF (reportlab) / Word (python-docx) generation
+│   │   ├── severity.py      ← reconciles DDInter verified_severity vs. AI risk_level
+│   │   │                       ("most severe wins" policy, "Next Up" #1) + DDInter
+│   │   │                       severity → generic action convention mapping ("Next Up" #2)
+│   │   ├── status.py        ← live per-source reachability check, backs GET /api/status
+│   │   └── reportgen.py     ← PDF (reportlab) / Word (python-docx) generation, incl.
+│   │                           action convention + data vintage lines ("Next Up" #2, #3)
 │   ├── models/
 │   │   └── schemas.py       ← all Pydantic models — check here first for the data shape
 │   └── cache/
@@ -191,7 +307,8 @@ ddi-checker/
 │   │   ├── druginfo/        ← DrugInfoPanel
 │   │   └── settings/        ← SettingsPanel (LLM key + data source status)
 │   ├── lib/
-│   │   └── useRdkit.ts      ← lazy-loads RDKit.js from CDN (not an npm dep — see docs/api_notes.md)
+│   │   ├── useRdkit.ts      ← lazy-loads RDKit.js from CDN (not an npm dep — see docs/api_notes.md)
+│   │   └── useDataSourceStatus.ts ← polls GET /api/status every 60s for live status badges
 │   └── styles/globals.css
 └── docs/
     └── api_notes.md         ← every API quirk found this session — read before touching
@@ -215,7 +332,9 @@ ddi-checker/
 - [x] PDF/Word/CSV report export
 - [x] Patient context (age/renal/hepatic/pregnancy/other conditions) — stays Tier 2
 - [ ] Adverse events overlay from OpenFDA FAERS — not started
-- [ ] Severity/AI-risk reconciliation, severity→action mapping, data vintage — see "Next Up" above, this is the current priority
+- [x] Severity/AI-risk reconciliation — done (see "Next Up" #1)
+- [x] Severity→action mapping — done (see "Next Up" #2)
+- [x] Data vintage / citation dates — done (see "Next Up" #3)
 
 ## v3 Scope (future)
 - [ ] Target → Drug triage integration (connect to SNP dashboard)

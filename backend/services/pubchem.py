@@ -42,8 +42,8 @@ async def get_structure(drug_name: str) -> dict | None:
     except (KeyError, IndexError):
         return None
 
-    set_cached_structure(drug_name, cid, smiles)
-    return {"cid": cid, "smiles": smiles}
+    cached_at = set_cached_structure(drug_name, cid, smiles)
+    return {"cid": cid, "smiles": smiles, "cached_at": cached_at}
 
 
 async def get_synonyms(drug_name: str) -> list[str]:

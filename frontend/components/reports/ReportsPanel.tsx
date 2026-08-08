@@ -18,19 +18,31 @@ interface ReportsPanelProps {
   onChanged?: () => void;
 }
 
+const PAGE_SIZE = 200;
+
 export function ReportsPanel({ onView, refreshKey, onChanged }: ReportsPanelProps) {
   const [items, setItems] = useState<HistorySummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/history?limit=200`)
-      .then((r) => r.json())
-      .then((d) => setItems(d.items))
-      .catch(() => setItems([]));
-    setSelected(new Set());
+    setLimit(PAGE_SIZE);
   }, [refreshKey]);
+
+  useEffect(() => {
+    setLoadingMore(true);
+    fetch(`${API_BASE}/api/history?limit=${limit}`)
+      .then((r) => r.json())
+      .then((d) => { setItems(d.items); setTotal(d.total); })
+      .catch(() => setItems([]))
+      .finally(() => setLoadingMore(false));
+    setSelected(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey, limit]);
 
   const filtered = filter === "all" ? items : items.filter((i) => i.risk_level === filter);
   const allVisibleSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
@@ -80,8 +92,13 @@ export function ReportsPanel({ onView, refreshKey, onChanged }: ReportsPanelProp
   }
 
   function exportCsv() {
+    // Export the checked rows if any are selected — previously this always
+    // exported the whole filtered list regardless of the checkboxes, so
+    // checking a handful of rows to export "just these" silently exported
+    // everything in the active filter instead.
+    const source = selected.size > 0 ? filtered.filter((i) => selected.has(i.id)) : filtered;
     const header = "drug_a,drug_b,risk_level,provider,checked_at";
-    const rows = filtered.map((i) =>
+    const rows = source.map((i) =>
       [i.standard_a, i.standard_b, i.risk_level, i.provider, i.created_at]
         .map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")
     );
@@ -119,9 +136,15 @@ export function ReportsPanel({ onView, refreshKey, onChanged }: ReportsPanelProp
               🗑 Delete selected ({selected.size})
             </button>
           )}
-          <button className="act-btn" onClick={exportCsv}>📥 Export CSV</button>
+          <button className="act-btn" onClick={exportCsv}>
+            📥 Export CSV{selected.size > 0 ? ` (${selected.size} selected)` : ""}
+          </button>
         </div>
       </div>
+      <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 8px" }}>
+        Showing {items.length} of {total} logged check{total === 1 ? "" : "s"}
+        {filter !== "all" && ` (${filtered.length} match "${FILTERS.find((f) => f.id === filter)?.label}")`}
+      </p>
       {filtered.length === 0 ? (
         <div className="empty-note">No checks match this filter yet.</div>
       ) : (
@@ -150,6 +173,16 @@ export function ReportsPanel({ onView, refreshKey, onChanged }: ReportsPanelProp
             </tbody>
           </table>
         </div>
+      )}
+      {items.length < total && (
+        <button
+          className="act-btn"
+          style={{ marginTop: 10 }}
+          disabled={loadingMore}
+          onClick={() => setLimit((l) => l + PAGE_SIZE)}
+        >
+          {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_SIZE, total - items.length)} more`}
+        </button>
       )}
     </div>
   );

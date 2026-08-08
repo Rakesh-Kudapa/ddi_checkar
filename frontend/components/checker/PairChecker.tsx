@@ -58,9 +58,23 @@ export function PairChecker({ llm, seed, onGoMulti, onChecked }: PairCheckerProp
 
   useEffect(() => {
     if (!seed) return;
+    // Loading a history item, a Sidebar quick-pair, or a Multi-drug cell all
+    // land here. If the user has typed something of their own that hasn't
+    // been checked yet, confirm before silently discarding it.
+    const hasUnsavedTyping =
+      !loading && !result && (drugA.trim() || drugB.trim()) &&
+      (drugA !== seed.drugA || drugB !== seed.drugB);
+    if (hasUnsavedTyping && !window.confirm("Discard your in-progress drug entry and load this instead?")) {
+      return;
+    }
     setDrugA(seed.drugA);
     setDrugB(seed.drugB);
     setError(null);
+    // Previously left whatever patient context was set for the LAST check in
+    // place — so reopening an unrelated pair silently sent stale age/renal/
+    // pregnancy data along with it. Restore what was actually used for a
+    // loaded result, or clear it for a fresh quick-pair.
+    setPatientContext(seed.result?.patient_context_used ?? EMPTY_PATIENT_CONTEXT);
     if (seed.result) {
       setResult(seed.result);
       setLoading(false);
@@ -70,7 +84,8 @@ export function PairChecker({ llm, seed, onGoMulti, onChecked }: PairCheckerProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.seedId]);
 
-  const canSubmit = drugA.trim().length > 0 && drugB.trim().length > 0 && llm.apiKey.trim().length > 0 && !loading;
+  const sameDrug = drugA.trim().length > 0 && drugA.trim().toLowerCase() === drugB.trim().toLowerCase();
+  const canSubmit = drugA.trim().length > 0 && drugB.trim().length > 0 && !sameDrug && llm.apiKey.trim().length > 0 && !loading;
 
   return (
     <div>
@@ -79,20 +94,24 @@ export function PairChecker({ llm, seed, onGoMulti, onChecked }: PairCheckerProp
         <p>Enter two drug names to check for clinically significant interactions</p>
       </div>
 
-      <div className="search-card">
+      <form
+        className="search-card"
+        onSubmit={(e) => { e.preventDefault(); if (canSubmit) runCheck(drugA, drugB); }}
+      >
         <div className="drug-row">
           <DrugInput label="Drug A" value={drugA} onChange={setDrugA} />
           <div className="vs">VS</div>
           <DrugInput label="Drug B" value={drugB} onChange={setDrugB} />
-          <button
-            className="check-btn"
-            disabled={!canSubmit}
-            onClick={() => runCheck(drugA, drugB)}
-          >
+          <button type="submit" className="check-btn" disabled={!canSubmit}>
             ⚡ {loading ? "Checking…" : "Check"}
           </button>
         </div>
-      </div>
+        {sameDrug && (
+          <p className="hint-warning" style={{ marginTop: 8, marginBottom: 0 }}>
+            Drug A and Drug B are the same — enter two different drugs to check.
+          </p>
+        )}
+      </form>
 
       <PatientContextForm value={patientContext} onChange={setPatientContext} />
 

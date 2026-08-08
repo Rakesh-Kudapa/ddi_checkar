@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDataSourceStatus } from "../../lib/useDataSourceStatus";
 
 export type LLMProvider = "anthropic" | "gemini" | "grok";
 
@@ -33,6 +34,7 @@ interface SettingsPanelProps {
 export function SettingsPanel({ value, onChange }: SettingsPanelProps) {
   const [draftKey, setDraftKey] = useState(value.apiKey);
   const [saved, setSaved] = useState(Boolean(value.apiKey));
+  const status = useDataSourceStatus();
 
   useEffect(() => {
     setDraftKey(value.apiKey);
@@ -40,9 +42,24 @@ export function SettingsPanel({ value, onChange }: SettingsPanelProps) {
   }, [value.provider]);
 
   function handleProviderChange(provider: LLMProvider) {
+    // draftKey can differ from what's actually saved for the CURRENT
+    // provider if the user typed a replacement key but hasn't clicked Save
+    // yet — switching providers used to silently discard that typing.
+    const savedKeyForCurrentProvider = localStorage.getItem(keyStorageKey(value.provider)) || "";
+    if (
+      draftKey.trim() !== savedKeyForCurrentProvider.trim() &&
+      !window.confirm("You have an unsaved API key for the current provider. Discard it and switch?")
+    ) {
+      return;
+    }
     const apiKey = localStorage.getItem(keyStorageKey(provider)) || "";
     localStorage.setItem(PROVIDER_KEY, provider);
     onChange({ provider, apiKey });
+  }
+
+  function statusDotClass(sourceStatus: string | undefined): string {
+    if (sourceStatus === undefined) return "";   // still loading — neutral dot
+    return sourceStatus === "online" || sourceStatus === "loaded" ? "ok" : "dead";
   }
 
   function handleSaveKey() {
@@ -96,17 +113,20 @@ export function SettingsPanel({ value, onChange }: SettingsPanelProps) {
         <div className="set-card">
           <div className="set-title">📊 Data sources</div>
           <div className="set-row">
-            <span><span className="status-dot ok" />OpenFDA drug labels</span>
+            <span><span className={`status-dot ${statusDotClass(status?.openfda)}`} />OpenFDA drug labels</span>
+            <span className="v2-badge" style={{ background: "var(--light)" }}>{status?.openfda ?? "checking…"}</span>
           </div>
           <div className="set-row">
-            <span><span className="status-dot ok" />ChEMBL (verified mechanism + citations)</span>
+            <span><span className={`status-dot ${statusDotClass(status?.chembl)}`} />ChEMBL (verified mechanism + citations)</span>
+            <span className="v2-badge" style={{ background: "var(--light)" }}>{status?.chembl ?? "checking…"}</span>
           </div>
           <div className="set-row">
-            <span><span className="status-dot ok" />DDInter (verified severity)</span>
+            <span><span className={`status-dot ${statusDotClass(status?.ddinter)}`} />DDInter (verified severity)</span>
             <span className="v2-badge" style={{ background: "var(--light)" }}>CC BY-NC-SA</span>
           </div>
           <div className="set-row">
-            <span><span className="status-dot ok" />PubChem (2D structures)</span>
+            <span><span className={`status-dot ${statusDotClass(status?.pubchem)}`} />PubChem (2D structures)</span>
+            <span className="v2-badge" style={{ background: "var(--light)" }}>{status?.pubchem ?? "checking…"}</span>
           </div>
           <div className="set-row">
             <span><span className="status-dot dead" />RxNav interaction API</span>

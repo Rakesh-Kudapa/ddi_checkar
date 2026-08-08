@@ -8,10 +8,12 @@ interface DrugInfoResult {
   name: string;
   rxcui: string | null;
   standard_name: string;
+  resolved_at: string | null;
   drug_classes: string[];
   label_excerpt: string;
   pubchem_cid: number | null;
   smiles: string | null;
+  structure_retrieved_at: string | null;
   verified_mechanisms: VerifiedMechanism[];
 }
 
@@ -80,6 +82,18 @@ export function DrugInfoPanel() {
                 <div className="dp-row">
                   <span className="dp-key">PubChem CID</span>
                   <span className="dp-val">{info.pubchem_cid}</span>
+                </div>
+              )}
+              {info.resolved_at && (
+                <div className="dp-row">
+                  <span className="dp-key">RxCUI resolved</span>
+                  <span className="dp-val">{info.resolved_at} UTC</span>
+                </div>
+              )}
+              {info.structure_retrieved_at && (
+                <div className="dp-row">
+                  <span className="dp-key">Structure retrieved</span>
+                  <span className="dp-val">{info.structure_retrieved_at} UTC</span>
                 </div>
               )}
             </div>

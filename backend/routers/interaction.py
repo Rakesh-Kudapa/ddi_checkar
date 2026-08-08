@@ -8,9 +8,9 @@ from backend.models.schemas import (
     InteractionRequest, InteractionResult, AutocompleteResult,
     MultiCheckRequest, MultiCheckResult, HistoryListResult, HistoryDetail,
     DrugInfoResult, LLMProvider, VerifiedMechanism, VerifiedSeverity, PatientContext,
-    DeleteHistoryRequest, DeleteHistoryResult,
+    DeleteHistoryRequest, DeleteHistoryResult, DataSourceStatus,
 )
-from backend.services import rxnorm, rxnav, openfda, llm, rxclass, pubchem, chembl, reportgen
+from backend.services import rxnorm, rxnav, openfda, llm, rxclass, pubchem, chembl, reportgen, severity, status
 from backend.cache import sqlite as cache
 
 router = APIRouter()
@@ -49,8 +49,8 @@ async def run_check(
 
     try:
         ddi_data  = await rxnav.get_interaction(drug_a.rxcui, drug_b.rxcui)
-        label_a   = await openfda.get_label_interactions(drug_a.standard_name)
-        label_b   = await openfda.get_label_interactions(drug_b.standard_name)
+        label_a, label_a_field = await openfda.get_label_interactions(drug_a.standard_name)
+        label_b, label_b_field = await openfda.get_label_interactions(drug_b.standard_name)
         struct_a  = await pubchem.get_structure(drug_a.standard_name)
         struct_b  = await pubchem.get_structure(drug_b.standard_name)
         verified_a = await chembl.get_verified_mechanisms(drug_a.standard_name)
@@ -59,9 +59,15 @@ async def run_check(
         raise HTTPException(status_code=502, detail=f"Data source lookup failed: {_describe(e)}")
 
     if struct_a:
-        drug_a = drug_a.model_copy(update={"pubchem_cid": struct_a["cid"], "smiles": struct_a["smiles"]})
+        drug_a = drug_a.model_copy(update={
+            "pubchem_cid": struct_a["cid"], "smiles": struct_a["smiles"],
+            "structure_retrieved_at": struct_a.get("cached_at"),
+        })
     if struct_b:
-        drug_b = drug_b.model_copy(update={"pubchem_cid": struct_b["cid"], "smiles": struct_b["smiles"]})
+        drug_b = drug_b.model_copy(update={
+            "pubchem_cid": struct_b["cid"], "smiles": struct_b["smiles"],
+            "structure_retrieved_at": struct_b.get("cached_at"),
+        })
     # model_copy(update=...) does NOT validate/coerce — without this, the
     # raw dicts from chembl.get_verified_mechanisms() would sit in a field
     # typed List[VerifiedMechanism], breaking anything that expects real
@@ -73,6 +79,7 @@ async def run_check(
         result = await llm.synthesize(
             drug_a=drug_a, drug_b=drug_b,
             ddi_data=ddi_data, label_a=label_a, label_b=label_b,
+            label_a_field=label_a_field, label_b_field=label_b_field,
             provider=provider, api_key=api_key, patient_context=patient_context,
         )
     except llm.LLMAuthError as e:
@@ -107,7 +114,12 @@ async def run_check(
                 if severity_level:
                     break
     if severity_level:
-        result = result.model_copy(update={"verified_severity": VerifiedSeverity(level=severity_level)})
+        verified_severity = VerifiedSeverity(level=severity_level)
+        result = result.model_copy(update={
+            "verified_severity": verified_severity,
+            "severity_comparison": severity.reconcile(verified_severity, result.risk_level),
+            "action_convention": severity.action_convention_for(verified_severity),
+        })
 
     return result
 
@@ -116,6 +128,8 @@ async def run_check(
 async def check_interaction(req: InteractionRequest):
     if not req.llm_api_key.strip():
         raise HTTPException(status_code=400, detail="Missing LLM API key — add one in Settings")
+    if req.drug_a.strip().lower() == req.drug_b.strip().lower():
+        raise HTTPException(status_code=400, detail="Drug A and Drug B must be different drugs")
 
     result = await run_check(
         req.drug_a, req.drug_b, req.llm_provider, req.llm_api_key,
@@ -130,9 +144,18 @@ async def check_multi(req: MultiCheckRequest):
     if not req.llm_api_key.strip():
         raise HTTPException(status_code=400, detail="Missing LLM API key — add one in Settings")
 
-    names = [d.strip() for d in req.drugs if d.strip()]
+    # Case-insensitive dedup (keep first occurrence) — without this, a panel
+    # like ["Warfarin", "warfarin", "Aspirin"] would silently generate a
+    # self-pair ("Warfarin" vs "warfarin"), wasting an LLM call on a
+    # meaningless self-interaction and producing a nonsense result row.
+    names, seen_lower = [], set()
+    for d in req.drugs:
+        d = d.strip()
+        if d and d.lower() not in seen_lower:
+            names.append(d)
+            seen_lower.add(d.lower())
     if len(names) < 2:
-        raise HTTPException(status_code=400, detail="Need at least 2 drug names")
+        raise HTTPException(status_code=400, detail="Need at least 2 distinct drug names")
     if len(names) > MAX_MULTI_DRUGS:
         raise HTTPException(status_code=400, detail=f"Max {MAX_MULTI_DRUGS} drugs per panel")
 
@@ -160,8 +183,8 @@ async def check_multi(req: MultiCheckRequest):
 
 @router.get("/history", response_model=HistoryListResult)
 async def get_history(limit: int = 50):
-    items = cache.list_history(limit=limit)
-    return HistoryListResult(items=items)
+    items, total = cache.list_history(limit=limit)
+    return HistoryListResult(items=items, total=total)
 
 
 @router.delete("/history", response_model=DeleteHistoryResult)
@@ -192,7 +215,7 @@ async def drug_info(name: str):
 
     try:
         drug_classes = await rxclass.get_drug_class(resolved.rxcui)
-        label_excerpt = await openfda.get_label_interactions(resolved.standard_name)
+        label_excerpt, _ = await openfda.get_label_interactions(resolved.standard_name)
         structure = await pubchem.get_structure(resolved.standard_name)
         verified = await chembl.get_verified_mechanisms(resolved.standard_name)
     except httpx.HTTPError as e:
@@ -202,10 +225,12 @@ async def drug_info(name: str):
         name=resolved.name,
         rxcui=resolved.rxcui,
         standard_name=resolved.standard_name,
+        resolved_at=resolved.resolved_at,
         drug_classes=drug_classes,
         label_excerpt=label_excerpt or "No FDA label data found for this drug.",
         pubchem_cid=structure["cid"] if structure else None,
         smiles=structure["smiles"] if structure else None,
+        structure_retrieved_at=structure.get("cached_at") if structure else None,
         verified_mechanisms=verified,
     )
 
@@ -249,3 +274,12 @@ async def autocomplete(q: str):
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"RxNorm autocomplete failed: {_describe(e)}")
     return AutocompleteResult(suggestions=suggestions)
+
+
+@router.get("/status", response_model=DataSourceStatus)
+async def data_source_status():
+    """Live reachability of each external data source, for the TopBar/Settings
+    status badges — previously those were hardcoded strings that stayed
+    "online" even during a real outage. Polled periodically by the frontend,
+    not on every check, to keep this cheap."""
+    return DataSourceStatus(**await status.get_status())

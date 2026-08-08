@@ -8,6 +8,7 @@ export interface VerifiedMechanism {
   action_type: string | null;
   mechanism_of_action: string;
   references: MechanismReference[];
+  retrieved_at: string | null;
 }
 
 interface VerifiedMechanismCardProps {
@@ -44,6 +45,11 @@ export function VerifiedMechanismCard({ drugName, mechanisms }: VerifiedMechanis
               {m.references.map((r, j) => (
                 <a key={j} href={r.ref_url} target="_blank" rel="noreferrer">{r.ref_type}</a>
               ))}
+            </div>
+          )}
+          {m.retrieved_at && (
+            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+              Retrieved from ChEMBL: {m.retrieved_at} UTC
             </div>
           )}
         </div>

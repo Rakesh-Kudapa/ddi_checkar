@@ -16,7 +16,7 @@ async def get_verified_mechanisms(drug_name: str) -> list[dict]:
     """
     cached = get_cached_chembl(drug_name)
     if cached is not None:
-        return cached
+        return _with_retrieved_at(cached["mechanisms"], cached["cached_at"])
 
     async with httpx.AsyncClient(timeout=10) as client:
         search_resp = await client.get(
@@ -66,5 +66,13 @@ async def get_verified_mechanisms(drug_name: str) -> list[dict]:
                 "references": references,
             })
 
-    set_cached_chembl(drug_name, results)
-    return results
+    cached_at = set_cached_chembl(drug_name, results)
+    return _with_retrieved_at(results, cached_at)
+
+
+def _with_retrieved_at(mechanisms: list[dict], retrieved_at: str) -> list[dict]:
+    """Stamps each mechanism dict with when its drug's ChEMBL entry was
+    cached — surfaced as VerifiedMechanism.retrieved_at, CLAUDE.md "Next Up" #3.
+    All mechanisms for a drug share one timestamp: chembl_cache stores one
+    row (one cached_at) per drug, not per mechanism."""
+    return [{**m, "retrieved_at": retrieved_at} for m in mechanisms]

@@ -28,6 +28,19 @@
 - No key: 240 req/min
 - With OPENFDA_API_KEY: 1000 req/min (free registration at open.fda.gov)
 - drug_interactions field in label.json is raw text — sometimes very long, cap at 3000 chars
+- **Brand names silently returned zero data until 2026-08-08's fix.** `get_label_interactions()`
+  originally tried `openfda.generic_name` then `openfda.substance_name` only. Verified
+  empirically that "Lipitor" and "Tylenol" — both totally normal things to type, and
+  RxNorm sometimes resolves a brand name to itself rather than expanding it to the
+  generic ingredient — returned `"No FDA label data found"` while "atorvastatin" and
+  "acetaminophen" (the same real drugs) returned full label text. Fixed by adding
+  `openfda.brand_name` as a third fallback field. `get_label_interactions()` now returns
+  `(text, matched_field)` instead of just `text`, so the citation URL built in `llm.py`
+  reproduces whichever field actually matched — a citation link that always assumed
+  `generic_name` would silently return nothing when clicked for a brand-name match.
+  Even with this fix, some brands still genuinely have no `drug_interactions` section in
+  OpenFDA's data (confirmed for Tylenol) — that's a real data gap, not a bug, and is
+  shown honestly as "No FDA label data found" same as before.
 
 ## LLM Synthesis (multi-provider)
 - User picks a provider in the UI (Settings panel) and pastes their own API key — never stored server-side, only in the browser's localStorage and forwarded per-request.

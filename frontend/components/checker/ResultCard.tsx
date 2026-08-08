@@ -17,8 +17,10 @@ export interface DrugResolved {
   name: string;
   rxcui: string | null;
   standard_name: string;
+  resolved_at: string | null;
   pubchem_cid: number | null;
   smiles: string | null;
+  structure_retrieved_at: string | null;
   verified_mechanisms: VerifiedMechanism[];
 }
 
@@ -30,6 +32,22 @@ export interface InteractionSource {
 export interface VerifiedSeverity {
   level: string;
   source: string;
+  dataset_date: string;
+}
+
+export interface ActionConvention {
+  action: string;
+  description: string;
+  basis: string;
+}
+
+export interface SeverityComparison {
+  agrees: boolean;
+  verified_normalized: RiskLevel;
+  ai_risk_level: RiskLevel;
+  display_level: RiskLevel;
+  display_source: "verified" | "ai" | "both";
+  explanation: string;
 }
 
 export interface PatientContext {
@@ -56,6 +74,8 @@ export interface InteractionResult {
   llm_summary: string;
   sources: InteractionSource[];
   verified_severity: VerifiedSeverity | null;
+  severity_comparison: SeverityComparison | null;
+  action_convention: ActionConvention | null;
   patient_context_used: PatientContext | null;
   disclaimer: string;
 }
@@ -97,11 +117,31 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
   const [tab, setTab] = useState<RTab>("summary");
   const [exporting, setExporting] = useState<"pdf" | "docx" | null>(null);
 
+  // When DDInter's verified severity and the AI's risk_level disagree, the
+  // headline leads with whichever is more severe (see backend/services/severity.py
+  // for the reconciliation logic and the stated "most severe wins" policy).
+  const cmp = result.severity_comparison;
+  const headlineLevel = cmp?.display_level ?? result.risk_level;
+
+  // Mirrors backend/services/reportgen.py's _data_vintage_lines() so the
+  // Sources tab and the PDF/Word exports show the same retrieval dates.
+  const dataVintageLines: string[] = [];
+  for (const drug of [result.drug_a, result.drug_b]) {
+    if (drug.resolved_at) dataVintageLines.push(`${drug.standard_name} — RxCUI resolved (RxNorm): ${drug.resolved_at} UTC`);
+    if (drug.structure_retrieved_at) dataVintageLines.push(`${drug.standard_name} — structure retrieved (PubChem): ${drug.structure_retrieved_at} UTC`);
+    if (drug.verified_mechanisms[0]?.retrieved_at) {
+      dataVintageLines.push(`${drug.standard_name} — mechanism retrieved (ChEMBL): ${drug.verified_mechanisms[0].retrieved_at} UTC`);
+    }
+  }
+
   function exportCsv() {
-    const header = "drug_a,drug_b,risk_level,verified_severity,mechanism,mechanism_type,targets_involved,pathway,clinical_effect,recommendation";
+    const header = "drug_a,drug_b,risk_level,verified_severity,severity_agreement,headline_severity,suggested_action,mechanism,mechanism_type,targets_involved,pathway,clinical_effect,recommendation";
     const row = [
       result.drug_a.standard_name, result.drug_b.standard_name, result.risk_level,
       result.verified_severity ? `${result.verified_severity.level} (${result.verified_severity.source})` : "not found",
+      cmp ? (cmp.agrees ? "agree" : "disagree") : "n/a",
+      headlineLevel,
+      result.action_convention ? result.action_convention.action : "n/a",
       result.mechanism, result.mechanism_type, result.targets_involved.join("; "),
       result.pathway, result.clinical_effect, result.recommendation,
     ].map((v) => `"${v.replace(/"/g, '""')}"`).join(",");
@@ -141,15 +181,20 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
   return (
     <>
       <div className="risk-card">
-        <div className={`rh ${result.risk_level}`}>
-          <div className="rh-icon">{RISK_ICON[result.risk_level]}</div>
+        <div className={`rh ${headlineLevel}`}>
+          <div className="rh-icon">{RISK_ICON[headlineLevel]}</div>
           <div>
             <div className="rh-title">
               {result.drug_a.standard_name} + {result.drug_b.standard_name}
             </div>
-            <div className="rh-meta">RxCUI {result.drug_a.rxcui} · {result.drug_b.rxcui}</div>
+            <div className="rh-meta">
+              RxCUI {result.drug_a.rxcui} · {result.drug_b.rxcui}
+              {cmp && !cmp.agrees && (
+                <span> · severity sources disagree, showing the more severe reading</span>
+              )}
+            </div>
           </div>
-          <div className="rbadge">{result.risk_level}</div>
+          <div className="rbadge">{headlineLevel}</div>
         </div>
         <div className="rbody">
           <div className="rtabs">
@@ -168,9 +213,30 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
             <div className="rpanel">
               <div style={{ marginBottom: 12 }}>
                 {result.verified_severity ? (
-                  <span className="verified-badge" style={{ fontSize: 11, padding: "4px 10px" }}>
-                    ✓ Verified severity ({result.verified_severity.source}): {result.verified_severity.level.toUpperCase()}
-                  </span>
+                  <>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: cmp ? 8 : 0 }}>
+                      <span className="verified-badge" style={{ fontSize: 11, padding: "4px 10px" }}>
+                        ✓ Verified severity ({result.verified_severity.source}): {result.verified_severity.level.toUpperCase()}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8,
+                          background: "var(--light)", border: "1px solid var(--border)", color: "var(--muted)",
+                        }}
+                      >
+                        🤖 AI risk level: {result.risk_level.toUpperCase()}
+                      </span>
+                    </div>
+                    {cmp && (
+                      <div
+                        className={cmp.agrees ? "locked-note" : "disclaimer"}
+                        style={{ fontSize: 11.5, lineHeight: 1.5 }}
+                      >
+                        {cmp.agrees ? "✓ " : "⚠ "}
+                        {cmp.explanation}
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>
                     No DDInter-verified severity found for this pair — risk level above is AI-assessed only.
@@ -239,10 +305,23 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
                   <div className="ival">{result.clinical_effect}</div>
                 </div>
                 <div className="ibox">
-                  <div className="ilbl">Recommendation</div>
+                  <div className="ilbl">Recommendation (AI-synthesized)</div>
                   <div className="ival">{result.recommendation}</div>
                 </div>
               </div>
+              {result.action_convention && (
+                <>
+                  <div className="divider" />
+                  <div className="ilbl" style={{ marginBottom: 6 }}>
+                    Suggested action — general convention
+                  </div>
+                  <div className="locked-note" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+                    <div style={{ fontWeight: 700, color: "var(--text)" }}>{result.action_convention.action}</div>
+                    <div>{result.action_convention.description}</div>
+                    <div style={{ fontSize: 10, fontStyle: "italic" }}>{result.action_convention.basis}</div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -264,7 +343,9 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
                 <div className="src-list">
                   {result.verified_severity && (
                     <div className="src-item">
-                      <span className="src-name">DDInter 2.0 (severity rating, CC BY-NC-SA 4.0)</span>
+                      <span className="src-name">
+                        DDInter 2.0 (severity rating, CC BY-NC-SA 4.0) — dataset version {result.verified_severity.dataset_date}
+                      </span>
                       <a className="src-url" href="https://ddinter.scbdd.com" target="_blank" rel="noreferrer">
                         https://ddinter.scbdd.com
                       </a>
@@ -286,17 +367,48 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
                   OpenFDA data.
                 </p>
               )}
+
+              {dataVintageLines.length > 0 && (
+                <>
+                  <div className="divider" />
+                  <div className="sec-title">Data vintage</div>
+                  <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
+                    When each cached data source behind this result was retrieved — useful if
+                    you're citing this result later.
+                  </p>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.8 }}>
+                    {dataVintageLines.map((line, i) => <li key={i}>{line}</li>)}
+                  </ul>
+                </>
+              )}
             </div>
           )}
 
           {tab === "raw" && (
             <div className="rpanel">
-              <div className="sec-title">RxNav interaction data</div>
-              <div className="code-box">
-                RxNav's Drug Interaction API was retired by NLM and returns no data for
-                any query — there is no raw structured severity payload to show here.
-                See the Sources tab for what data (if any) actually fed this result.
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div className="sec-title" style={{ margin: 0 }}>Full result (JSON)</div>
+                <button
+                  className="act-btn"
+                  onClick={() => navigator.clipboard.writeText(JSON.stringify(result, null, 2))}
+                >
+                  📋 Copy JSON
+                </button>
               </div>
+              <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>
+                The complete structured result exactly as returned by the backend — every
+                field shown elsewhere in this card (and a few that aren't), for auditing
+                exactly what fed the AI-synthesized fields versus what came from a
+                verified source.
+              </p>
+              <div className="code-box" style={{ maxHeight: 420, overflowY: "auto" }}>
+                {JSON.stringify(result, null, 2)}
+              </div>
+              <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
+                Note: RxNav's Drug Interaction API was retired by NLM and always returns no
+                data — it never contributes anything to this result. See the Sources tab
+                for what data actually fed it.
+              </p>
             </div>
           )}
         </div>

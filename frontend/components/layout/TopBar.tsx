@@ -1,4 +1,5 @@
 import { LLMProvider } from "../settings/SettingsPanel";
+import { useDataSourceStatus } from "../../lib/useDataSourceStatus";
 
 export type TabId = "checker" | "reports" | "druginfo" | "settings";
 
@@ -22,6 +23,10 @@ interface TopBarProps {
 }
 
 export function TopBar({ activeTab, onTabChange, llmProvider }: TopBarProps) {
+  const status = useDataSourceStatus();
+  const openfdaLabel = status === null ? "checking…" : status.openfda;
+  const openfdaWarn = status !== null && status.openfda !== "online";
+
   return (
     <div className="topbar">
       <div className="logo">💊 DDI Checker <span className="logo-tag">RESEARCH</span></div>
@@ -37,7 +42,9 @@ export function TopBar({ activeTab, onTabChange, llmProvider }: TopBarProps) {
         ))}
       </div>
       <div className="topbar-right">
-        <div className="tbadge">OpenFDA: online</div>
+        <div className={`tbadge ${openfdaWarn ? "warn" : ""}`} title="Live-checked every 60s">
+          OpenFDA: {openfdaLabel}
+        </div>
         <div className="tbadge warn">RxNav Interaction: retired</div>
         <div className="tbadge">{PROVIDER_LABELS[llmProvider]}</div>
       </div>

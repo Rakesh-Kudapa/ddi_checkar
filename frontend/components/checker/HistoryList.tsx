@@ -28,6 +28,8 @@ export function historyDetailToResult(detail: any): InteractionResult {
     llm_summary: detail.llm_summary,
     sources: detail.sources,
     verified_severity: detail.verified_severity,
+    severity_comparison: detail.severity_comparison,
+    action_convention: detail.action_convention,
     patient_context_used: detail.patient_context_used,
     disclaimer: detail.disclaimer,
   };
@@ -50,18 +52,27 @@ interface HistoryListProps {
   onChanged?: () => void;
 }
 
+const PAGE_SIZE = 50;
+
 export function HistoryList({ onSelect, refreshKey, onChanged }: HistoryListProps) {
   const [items, setItems] = useState<HistorySummary[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/history?limit=50`)
+    setLimit(PAGE_SIZE);
+  }, [refreshKey]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/history?limit=${limit}`)
       .then((r) => r.json())
-      .then((d) => setItems(d.items))
+      .then((d) => { setItems(d.items); setTotal(d.total); })
       .catch(() => setError("Could not load history"));
     setSelected(new Set());
-  }, [refreshKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey, limit]);
 
   async function handleClick(item: HistorySummary) {
     const res = await fetch(`${API_BASE}/api/history/${item.id}`);
@@ -129,6 +140,11 @@ export function HistoryList({ onSelect, refreshKey, onChanged }: HistoryListProp
           </div>
         ))}
       </div>
+      {items && items.length < total && (
+        <button className="act-btn" style={{ marginTop: 10 }} onClick={() => setLimit((l) => l + PAGE_SIZE)}>
+          Load {Math.min(PAGE_SIZE, total - items.length)} more (showing {items.length} of {total})
+        </button>
+      )}
     </div>
   );
 }

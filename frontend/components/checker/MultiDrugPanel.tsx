@@ -28,16 +28,26 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
 
   useEffect(() => {
     if (!seed) return;
-    setDrugs(seed.drugs.filter((d, i, arr) => d.trim() && arr.indexOf(d) === i).slice(0, MAX_DRUGS));
+    const lowerSeen = new Set<string>();
+    setDrugs(
+      seed.drugs
+        .filter((d) => d.trim())
+        .filter((d) => (lowerSeen.has(d.toLowerCase()) ? false : (lowerSeen.add(d.toLowerCase()), true)))
+        .slice(0, MAX_DRUGS)
+    );
     setPairs(null);
     setExpanded(null);
     setError(null);
+    // Same bug as PairChecker: previously left the last panel's patient
+    // context in place for an unrelated new panel — clear it here too.
+    setPatientContext(EMPTY_PATIENT_CONTEXT);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.seedId]);
 
   function addDrug() {
     const d = newDrug.trim();
-    if (!d || drugs.includes(d) || drugs.length >= MAX_DRUGS) return;
+    if (!d || drugs.length >= MAX_DRUGS) return;
+    if (drugs.some((x) => x.toLowerCase() === d.toLowerCase())) return;
     setDrugs([...drugs, d]);
     setNewDrug("");
   }
@@ -83,8 +93,15 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
     );
   }
 
+  // Matches ResultCard's headline logic: when verified severity and AI risk
+  // level disagree, the more severe of the two leads — see
+  // backend/services/severity.py.
+  function headlineOf(p: InteractionResult): RiskLevel {
+    return p.severity_comparison?.display_level ?? p.risk_level;
+  }
+
   const counts: Record<RiskLevel, number> = { high: 0, moderate: 0, low: 0, unknown: 0 };
-  pairs?.forEach((p) => counts[p.risk_level]++);
+  pairs?.forEach((p) => counts[headlineOf(p)]++);
 
   const canSubmit = drugs.length >= 2 && llm.apiKey.trim().length > 0 && !loading;
   const totalPairs = drugs.length * (drugs.length - 1) / 2;
@@ -165,13 +182,14 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
                       if (rowDrug === colDrug) return <td key={colDrug} className="m-self">—</td>;
                       const p = findPair(rowDrug, colDrug);
                       if (!p) return <td key={colDrug} className="m-unknown">—</td>;
+                      const headline = headlineOf(p);
                       return (
                         <td
                           key={colDrug}
-                          className={`m-${p.risk_level}`}
+                          className={`m-${headline}`}
                           onClick={() => setExpanded(p)}
                         >
-                          {p.risk_level.toUpperCase()}
+                          {headline.toUpperCase()}
                         </td>
                       );
                     })}

@@ -11,7 +11,8 @@ async def resolve(drug_name: str) -> DrugResolved:
         return DrugResolved(
             name=drug_name,
             rxcui=cached["rxcui"],
-            standard_name=cached["standard_name"]
+            standard_name=cached["standard_name"],
+            resolved_at=cached["cached_at"],
         )
 
     async with httpx.AsyncClient(timeout=10) as client:
@@ -28,9 +29,9 @@ async def resolve(drug_name: str) -> DrugResolved:
 
     rxcui         = candidates[0]["rxcui"]
     standard_name = candidates[0].get("name", drug_name)
-    set_cached_rxcui(drug_name, rxcui, standard_name)
+    resolved_at   = set_cached_rxcui(drug_name, rxcui, standard_name)
 
-    return DrugResolved(name=drug_name, rxcui=rxcui, standard_name=standard_name)
+    return DrugResolved(name=drug_name, rxcui=rxcui, standard_name=standard_name, resolved_at=resolved_at)
 
 async def autocomplete(query: str) -> list[str]:
     """Return up to 8 drug name suggestions.

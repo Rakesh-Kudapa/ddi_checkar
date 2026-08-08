@@ -40,6 +40,25 @@ def _esc_attr(text: str) -> str:
     return _xml_quoteattr(text)
 
 
+def _data_vintage_lines(result: InteractionResult) -> list[str]:
+    """Plain-text lines noting when each cached data source was retrieved —
+    matters if a user cites a result later. CLAUDE.md "Next Up" #3."""
+    lines = []
+    for drug in (result.drug_a, result.drug_b):
+        if drug.resolved_at:
+            lines.append(f"{drug.standard_name} — RxCUI resolved (RxNorm): {drug.resolved_at} UTC")
+        if drug.structure_retrieved_at:
+            lines.append(f"{drug.standard_name} — structure retrieved (PubChem): {drug.structure_retrieved_at} UTC")
+        if drug.verified_mechanisms and drug.verified_mechanisms[0].retrieved_at:
+            lines.append(
+                f"{drug.standard_name} — mechanism retrieved (ChEMBL): "
+                f"{drug.verified_mechanisms[0].retrieved_at} UTC"
+            )
+    if result.verified_severity:
+        lines.append(f"DDInter severity dataset version: {result.verified_severity.dataset_date}")
+    return lines
+
+
 def _describe_patient_context(pc) -> str:
     parts = []
     if pc.age is not None:
@@ -63,22 +82,26 @@ def build_pdf(result: InteractionResult) -> bytes:
     h2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=6)
     body = ParagraphStyle("Body", parent=styles["Normal"], fontSize=10, leading=15)
     small = ParagraphStyle("Small", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#64748b"))
+    headline_level = result.severity_comparison.display_level.value if result.severity_comparison else result.risk_level.value
     risk_style = ParagraphStyle(
         "Risk", parent=styles["Normal"], fontSize=12,
-        textColor=colors.HexColor(RISK_HEX.get(result.risk_level.value, "#475569")), spaceAfter=10,
+        textColor=colors.HexColor(RISK_HEX.get(headline_level, "#475569")), spaceAfter=10,
     )
 
     story = [
         Paragraph("Drug-Drug Interaction Report", h1),
         Paragraph(f"{_esc(result.drug_a.standard_name)} + {_esc(result.drug_b.standard_name)}", body),
-        Paragraph(f"Risk level: {_esc(result.risk_level.value.upper())}", risk_style),
+        Paragraph(f"Risk level: {_esc(headline_level.upper())}", risk_style),
     ]
 
     if result.verified_severity:
         story.append(Paragraph(
             f"Verified severity ({_esc(result.verified_severity.source)}): "
-            f"{_esc(result.verified_severity.level.upper())}", body
+            f"{_esc(result.verified_severity.level.upper())}   ·   "
+            f"AI risk level: {_esc(result.risk_level.value.upper())}", body
         ))
+        if result.severity_comparison:
+            story.append(Paragraph(_esc(result.severity_comparison.explanation), small))
     else:
         story.append(Paragraph(
             "No DDInter-verified severity found for this pair — risk level above is AI-assessed only.", small
@@ -126,13 +149,21 @@ def build_pdf(result: InteractionResult) -> bytes:
     story.append(Paragraph("Recommendation", h2))
     story.append(Paragraph(_esc(result.recommendation), body))
 
+    if result.action_convention:
+        story.append(Paragraph("Suggested Action — General Convention", h2))
+        story.append(Paragraph(
+            f"<b>{_esc(result.action_convention.action)}</b> — {_esc(result.action_convention.description)}", body
+        ))
+        story.append(Paragraph(_esc(result.action_convention.basis), small))
+
     story.append(Paragraph("Sources", h2))
     if result.sources or result.verified_severity:
         items = []
         if result.verified_severity:
             items.append(ListItem(Paragraph(
                 'DDInter 2.0 (severity rating, CC BY-NC-SA 4.0) — '
-                '<a href="https://ddinter.scbdd.com" color="blue">https://ddinter.scbdd.com</a>', body
+                '<a href="https://ddinter.scbdd.com" color="blue">https://ddinter.scbdd.com</a> — '
+                f'dataset version {_esc(result.verified_severity.dataset_date)}', body
             )))
         items += [
             ListItem(Paragraph(f'{_esc(s.name)} — <a href={_esc_attr(s.url)} color="blue">{_esc(s.url)}</a>', body))
@@ -142,6 +173,13 @@ def build_pdf(result: InteractionResult) -> bytes:
     else:
         story.append(Paragraph(
             "No independently-cited sources — relied on the LLM's own pharmacology knowledge.", body
+        ))
+
+    vintage_lines = _data_vintage_lines(result)
+    if vintage_lines:
+        story.append(Paragraph("Data Vintage", h2))
+        story.append(ListFlowable(
+            [ListItem(Paragraph(_esc(line), small)) for line in vintage_lines], bulletType="bullet"
         ))
 
     story.append(Spacer(1, 14))
@@ -158,15 +196,21 @@ def build_docx(result: InteractionResult) -> bytes:
     doc.add_heading("Drug-Drug Interaction Report", level=1)
     doc.add_paragraph(f"{result.drug_a.standard_name} + {result.drug_b.standard_name}")
 
+    headline_level = result.severity_comparison.display_level.value if result.severity_comparison else result.risk_level.value
     risk_p = doc.add_paragraph()
-    risk_run = risk_p.add_run(f"Risk level: {result.risk_level.value.upper()}")
+    risk_run = risk_p.add_run(f"Risk level: {headline_level.upper()}")
     risk_run.bold = True
-    risk_run.font.color.rgb = RISK_RGB.get(result.risk_level.value, RGBColor(0x47, 0x55, 0x69))
+    risk_run.font.color.rgb = RISK_RGB.get(headline_level, RGBColor(0x47, 0x55, 0x69))
 
     if result.verified_severity:
         doc.add_paragraph(
             f"Verified severity ({result.verified_severity.source}): {result.verified_severity.level.upper()}"
+            f"   ·   AI risk level: {result.risk_level.value.upper()}"
         )
+        if result.severity_comparison:
+            note = doc.add_paragraph().add_run(result.severity_comparison.explanation)
+            note.italic = True
+            note.font.size = Pt(9)
     else:
         note = doc.add_paragraph().add_run(
             "No DDInter-verified severity found for this pair — risk level above is AI-assessed only."
@@ -209,17 +253,35 @@ def build_docx(result: InteractionResult) -> bytes:
     doc.add_heading("Recommendation", level=2)
     doc.add_paragraph(result.recommendation)
 
+    if result.action_convention:
+        doc.add_heading("Suggested Action — General Convention", level=2)
+        action_p = doc.add_paragraph()
+        action_p.add_run(result.action_convention.action).bold = True
+        action_p.add_run(f" — {result.action_convention.description}")
+        basis_run = doc.add_paragraph().add_run(result.action_convention.basis)
+        basis_run.italic = True
+        basis_run.font.size = Pt(9)
+
     doc.add_heading("Sources", level=2)
     if result.sources or result.verified_severity:
         if result.verified_severity:
             doc.add_paragraph(
-                "DDInter 2.0 (severity rating, CC BY-NC-SA 4.0) — https://ddinter.scbdd.com",
+                "DDInter 2.0 (severity rating, CC BY-NC-SA 4.0) — https://ddinter.scbdd.com — "
+                f"dataset version {result.verified_severity.dataset_date}",
                 style="List Bullet"
             )
         for s in result.sources:
             doc.add_paragraph(f"{s.name} — {s.url}", style="List Bullet")
     else:
         doc.add_paragraph("No independently-cited sources — relied on the LLM's own pharmacology knowledge.")
+
+    vintage_lines = _data_vintage_lines(result)
+    if vintage_lines:
+        doc.add_heading("Data Vintage", level=2)
+        for line in vintage_lines:
+            p = doc.add_paragraph(line, style="List Bullet")
+            for run in p.runs:
+                run.font.size = Pt(9)
 
     doc.add_paragraph()
     disclaimer_run = doc.add_paragraph().add_run(result.disclaimer)
