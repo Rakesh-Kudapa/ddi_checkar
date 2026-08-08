@@ -1,7 +1,8 @@
 import json
 import httpx
 from backend.models.schemas import (
-    DrugResolved, InteractionResult, InteractionSource, LLMProvider, RiskLevel
+    DrugResolved, InteractionResult, InteractionSource, LLMProvider,
+    MechanismType, RiskLevel
 )
 
 SYSTEM_PROMPT = """You are a clinical pharmacology assistant.
@@ -165,7 +166,10 @@ FDA label interactions — {drug_b.standard_name}:
 Return a JSON object with exactly these fields:
 {{
   "risk_level": "low" | "moderate" | "high" | "unknown",
-  "mechanism": "pharmacological mechanism of the interaction",
+  "mechanism": "pharmacological mechanism of the interaction, in plain prose",
+  "mechanism_type": "PK" | "PD" | "both" | "unknown" (PK = pharmacokinetic, e.g. one drug changes how the other is absorbed/metabolized/cleared; PD = pharmacodynamic, e.g. additive or opposing effects at the same or related targets; "both" if both apply),
+  "targets_involved": ["specific molecular targets, e.g. enzymes, receptors, transporters — e.g. VKORC1, COX-1, CYP2C9 — empty list if none are clearly identifiable from the data given"],
+  "pathway": "a short cascade description of how each drug acts and where the interaction arises, e.g. 'Warfarin inhibits VKORC1 -> reduced clotting factor synthesis. Aspirin inhibits COX-1 -> reduced platelet aggregation. Combined: dual anticoagulation -> bleeding risk.'",
   "clinical_effect": "what happens to the patient",
   "recommendation": "what a clinician should do",
   "llm_summary": "2-3 sentence plain English paragraph"
@@ -195,11 +199,23 @@ Return a JSON object with exactly these fields:
             url=f'https://api.fda.gov/drug/label.json?search=openfda.generic_name:"{drug_b.standard_name}"'
         ))
 
+    try:
+        mechanism_type = MechanismType(parsed.get("mechanism_type", "unknown"))
+    except ValueError:
+        mechanism_type = MechanismType.UNKNOWN
+
+    targets_involved = parsed.get("targets_involved", [])
+    if not isinstance(targets_involved, list):
+        targets_involved = []
+
     return InteractionResult(
         drug_a=drug_a,
         drug_b=drug_b,
         risk_level=RiskLevel(parsed["risk_level"]),
         mechanism=parsed["mechanism"],
+        mechanism_type=mechanism_type,
+        targets_involved=targets_involved,
+        pathway=parsed.get("pathway", ""),
         clinical_effect=parsed["clinical_effect"],
         recommendation=parsed["recommendation"],
         llm_summary=parsed["llm_summary"],

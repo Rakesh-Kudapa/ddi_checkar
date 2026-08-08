@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import logging
+import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,9 +17,16 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# Comma-separated list, e.g. "https://ddi-checker.vercel.app,http://localhost:4127".
+# Falls back to local dev only if unset, so a production deploy without this
+# set will (correctly) reject the browser's requests rather than silently
+# allowing an unknown origin.
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:4127")
+ALLOWED_ORIGINS = [o.strip() for o in _allowed_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4127"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

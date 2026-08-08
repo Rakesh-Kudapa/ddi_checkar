@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { InteractionResult, RiskLevel } from "./ResultCard";
+import { InteractionResult, RiskLevel, ResultCard } from "./ResultCard";
 import { LLMSettingsValue } from "../settings/SettingsPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
@@ -190,29 +190,7 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
             </div>
           </div>
 
-          {expanded && (
-            <div className="risk-card">
-              <div className={`rh ${expanded.risk_level}`}>
-                <div className="rh-icon">
-                  {expanded.risk_level === "high" ? "🔴" : expanded.risk_level === "moderate" ? "🟡" : expanded.risk_level === "low" ? "🟢" : "⚪"}
-                </div>
-                <div>
-                  <div className="rh-title">{expanded.drug_a.standard_name} + {expanded.drug_b.standard_name}</div>
-                </div>
-                <div className="rbadge">{expanded.risk_level}</div>
-              </div>
-              <div className="rbody">
-                <div className="rpanel">
-                  <p className="summary-p">{expanded.llm_summary}</p>
-                  <div className="divider" />
-                  <div className="ig">
-                    <div className="ibox"><div className="ilbl">Mechanism</div><div className="ival">{expanded.mechanism}</div></div>
-                    <div className="ibox"><div className="ilbl">Recommendation</div><div className="ival">{expanded.recommendation}</div></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          {expanded && <ResultCard result={expanded} />}
         </>
       )}
     </div>

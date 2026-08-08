@@ -3,12 +3,14 @@ import itertools
 import json
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from backend.models.schemas import (
     InteractionRequest, InteractionResult, AutocompleteResult,
     MultiCheckRequest, MultiCheckResult, HistoryListResult, HistoryDetail,
-    DrugInfoResult, LLMProvider,
+    DrugInfoResult, LLMProvider, VerifiedMechanism,
+    DeleteHistoryRequest, DeleteHistoryResult,
 )
-from backend.services import rxnorm, rxnav, openfda, llm, rxclass
+from backend.services import rxnorm, rxnav, openfda, llm, rxclass, pubchem, chembl, reportgen
 from backend.cache import sqlite as cache
 
 router = APIRouter()
@@ -45,8 +47,23 @@ async def run_check(drug_a_name: str, drug_b_name: str, provider: LLMProvider, a
         ddi_data  = await rxnav.get_interaction(drug_a.rxcui, drug_b.rxcui)
         label_a   = await openfda.get_label_interactions(drug_a.standard_name)
         label_b   = await openfda.get_label_interactions(drug_b.standard_name)
+        struct_a  = await pubchem.get_structure(drug_a.standard_name)
+        struct_b  = await pubchem.get_structure(drug_b.standard_name)
+        verified_a = await chembl.get_verified_mechanisms(drug_a.standard_name)
+        verified_b = await chembl.get_verified_mechanisms(drug_b.standard_name)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Data source lookup failed: {_describe(e)}")
+
+    if struct_a:
+        drug_a = drug_a.model_copy(update={"pubchem_cid": struct_a["cid"], "smiles": struct_a["smiles"]})
+    if struct_b:
+        drug_b = drug_b.model_copy(update={"pubchem_cid": struct_b["cid"], "smiles": struct_b["smiles"]})
+    # model_copy(update=...) does NOT validate/coerce — without this, the
+    # raw dicts from chembl.get_verified_mechanisms() would sit in a field
+    # typed List[VerifiedMechanism], breaking anything that expects real
+    # model instances (e.g. .model_dump() in save_history()).
+    drug_a = drug_a.model_copy(update={"verified_mechanisms": [VerifiedMechanism(**m) for m in verified_a]})
+    drug_b = drug_b.model_copy(update={"verified_mechanisms": [VerifiedMechanism(**m) for m in verified_b]})
 
     try:
         result = await llm.synthesize(
@@ -104,6 +121,14 @@ async def get_history(limit: int = 50):
     return HistoryListResult(items=items)
 
 
+@router.delete("/history", response_model=DeleteHistoryResult)
+async def delete_history(req: DeleteHistoryRequest):
+    if not req.ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    deleted = cache.delete_history_items(req.ids)
+    return DeleteHistoryResult(deleted=deleted)
+
+
 @router.get("/history/{item_id}", response_model=HistoryDetail)
 async def get_history_detail(item_id: int):
     item = cache.get_history_item(item_id)
@@ -125,6 +150,8 @@ async def drug_info(name: str):
     try:
         drug_classes = await rxclass.get_drug_class(resolved.rxcui)
         label_excerpt = await openfda.get_label_interactions(resolved.standard_name)
+        structure = await pubchem.get_structure(resolved.standard_name)
+        verified = await chembl.get_verified_mechanisms(resolved.standard_name)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Data source lookup failed: {_describe(e)}")
 
@@ -134,6 +161,38 @@ async def drug_info(name: str):
         standard_name=resolved.standard_name,
         drug_classes=drug_classes,
         label_excerpt=label_excerpt or "No FDA label data found for this drug.",
+        pubchem_cid=structure["cid"] if structure else None,
+        smiles=structure["smiles"] if structure else None,
+        verified_mechanisms=verified,
+    )
+
+
+EXPORT_CONTENT_TYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+@router.post("/export")
+async def export_report(result: InteractionResult, format: str = "pdf"):
+    """Generate a formatted report document from a result already held
+    client-side (a fresh check, a loaded History item, or an expanded
+    Multi-drug matrix cell) — no history-id lookup needed."""
+    if format not in EXPORT_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail="format must be 'pdf' or 'docx'")
+
+    try:
+        if format == "pdf":
+            file_bytes = reportgen.build_pdf(result)
+        else:
+            file_bytes = reportgen.build_docx(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {_describe(e)}")
+
+    filename = f"{result.drug_a.standard_name}_{result.drug_b.standard_name}.{format}".replace(" ", "_")
+    return Response(
+        content=file_bytes,
+        media_type=EXPORT_CONTENT_TYPES[format],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

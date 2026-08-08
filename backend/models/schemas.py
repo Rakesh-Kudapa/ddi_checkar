@@ -13,10 +13,29 @@ class LLMProvider(str, Enum):
     GEMINI = "gemini"
     GROK = "grok"
 
+class MechanismType(str, Enum):
+    PK = "PK"
+    PD = "PD"
+    BOTH = "both"
+    UNKNOWN = "unknown"
+
+class MechanismReference(BaseModel):
+    ref_type: str
+    ref_url: str
+
+class VerifiedMechanism(BaseModel):
+    target: str
+    action_type: Optional[str] = None
+    mechanism_of_action: str
+    references: List[MechanismReference]
+
 class DrugResolved(BaseModel):
     name: str               # original user input
     rxcui: Optional[str]    # resolved RxCUI ID
     standard_name: str      # RxNorm standard name
+    pubchem_cid: Optional[int] = None
+    smiles: Optional[str] = None
+    verified_mechanisms: List[VerifiedMechanism] = []
 
 class InteractionSource(BaseModel):
     name: str
@@ -33,6 +52,9 @@ class InteractionResult(BaseModel):
     drug_b: DrugResolved
     risk_level: RiskLevel
     mechanism: str
+    mechanism_type: MechanismType
+    targets_involved: List[str]
+    pathway: str
     clinical_effect: str
     recommendation: str
     llm_summary: str
@@ -64,17 +86,24 @@ class HistorySummary(BaseModel):
     provider: str
     created_at: str
 
+class DeleteHistoryRequest(BaseModel):
+    ids: List[int]
+
+class DeleteHistoryResult(BaseModel):
+    deleted: int
+
 class HistoryListResult(BaseModel):
     items: List[HistorySummary]
 
 class HistoryDetail(BaseModel):
     id: int
-    drug_a: str
-    drug_b: str
-    standard_a: str
-    standard_b: str
+    drug_a: DrugResolved
+    drug_b: DrugResolved
     risk_level: RiskLevel
     mechanism: str
+    mechanism_type: MechanismType
+    targets_involved: List[str]
+    pathway: str
     clinical_effect: str
     recommendation: str
     llm_summary: str
@@ -89,3 +118,6 @@ class DrugInfoResult(BaseModel):
     standard_name: str
     drug_classes: List[str]
     label_excerpt: str
+    pubchem_cid: Optional[int] = None
+    smiles: Optional[str] = None
+    verified_mechanisms: List[VerifiedMechanism] = []

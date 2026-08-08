@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { MoleculeView } from "../checker/MoleculeView";
+import { VerifiedMechanismCard, VerifiedMechanism } from "../checker/VerifiedMechanismCard";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
 
@@ -8,6 +10,9 @@ interface DrugInfoResult {
   standard_name: string;
   drug_classes: string[];
   label_excerpt: string;
+  pubchem_cid: number | null;
+  smiles: string | null;
+  verified_mechanisms: VerifiedMechanism[];
 }
 
 export function DrugInfoPanel() {
@@ -71,6 +76,12 @@ export function DrugInfoPanel() {
                 <span className="dp-key">Queried as</span>
                 <span className="dp-val">{info.name}</span>
               </div>
+              {info.pubchem_cid && (
+                <div className="dp-row">
+                  <span className="dp-key">PubChem CID</span>
+                  <span className="dp-val">{info.pubchem_cid}</span>
+                </div>
+              )}
             </div>
             <div className="dp-card">
               <div className="dp-name">Drug classification</div>
@@ -83,6 +94,16 @@ export function DrugInfoPanel() {
                 <p style={{ fontSize: 12, color: "var(--muted)" }}>No classification found.</p>
               )}
             </div>
+          </div>
+          <div className="dp-card" style={{ marginBottom: 12 }}>
+            <div className="sec-title">2D structure</div>
+            <div className="mol-row">
+              <MoleculeView smiles={info.smiles} label={info.standard_name} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div className="sec-title">Verified mechanism data (ChEMBL)</div>
+            <VerifiedMechanismCard drugName={info.standard_name} mechanisms={info.verified_mechanisms} />
           </div>
           <div className="dp-card">
             <div className="sec-title">FDA label — drug interactions section</div>

@@ -52,10 +52,10 @@ export default function Home() {
             <MultiDrugPanel llm={llm} seed={multiSeed} onChecked={bumpHistory} />
           )}
           {tab === "checker" && mode === "history" && (
-            <HistoryList onSelect={goToPair} refreshKey={historyRefreshKey} />
+            <HistoryList onSelect={goToPair} refreshKey={historyRefreshKey} onChanged={bumpHistory} />
           )}
           {tab === "reports" && (
-            <ReportsPanel onView={goToPair} refreshKey={historyRefreshKey} />
+            <ReportsPanel onView={goToPair} refreshKey={historyRefreshKey} onChanged={bumpHistory} />
           )}
           {tab === "druginfo" && <DrugInfoPanel />}
           {tab === "settings" && <SettingsPanel value={llm} onChange={setLlm} />}

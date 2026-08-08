@@ -12,6 +12,10 @@ export function DrugInput({ label, value, onChange }: DrugInputProps) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  // Tracks an explicit user dismissal (Escape / close button) so a
+  // suggestion fetch that resolves afterwards doesn't silently reopen the
+  // dropdown — a ref avoids stale-closure issues from the debounce timeout.
+  const dismissedRef = useRef(false);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -29,7 +33,7 @@ export function DrugInput({ label, value, onChange }: DrugInputProps) {
         if (!res.ok) return;
         const data = await res.json();
         setSuggestions(data.suggestions || []);
-        setOpen(true);
+        if (!dismissedRef.current) setOpen(true);
       } catch {
         setSuggestions([]);
       }
@@ -39,6 +43,11 @@ export function DrugInput({ label, value, onChange }: DrugInputProps) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [value]);
+
+  function close() {
+    dismissedRef.current = true;
+    setOpen(false);
+  }
 
   return (
     <div>
@@ -50,12 +59,25 @@ export function DrugInput({ label, value, onChange }: DrugInputProps) {
           value={value}
           placeholder="e.g. Warfarin"
           autoComplete="off"
-          onChange={(e) => onChange(e.target.value)}
-          onFocus={() => suggestions.length > 0 && setOpen(true)}
+          onChange={(e) => {
+            dismissedRef.current = false;
+            onChange(e.target.value);
+          }}
+          onFocus={() => {
+            if (suggestions.length > 0) {
+              dismissedRef.current = false;
+              setOpen(true);
+            }
+          }}
           onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={(e) => { if (e.key === "Escape") close(); }}
         />
         {open && suggestions.length > 0 && (
           <div className="ac-drop">
+            <div className="ac-drop-hdr">
+              <span>Suggestions</span>
+              <button className="ac-drop-close" onMouseDown={(e) => { e.preventDefault(); close(); }}>✕</button>
+            </div>
             {suggestions.map((s) => (
               <div
                 key={s}

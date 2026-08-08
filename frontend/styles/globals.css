@@ -46,7 +46,10 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-si
 .drug-in{width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;outline:none;font-family:var(--sans);color:var(--text);background:var(--surf);transition:border-color .15s}
 .drug-in:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(79,110,247,.1)}
 .vs{width:36px;height:36px;background:var(--light);border:1px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--muted);flex-shrink:0}
-.ac-drop{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.1);z-index:999;max-height:220px;overflow-y:auto}
+.ac-drop{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.1);z-index:999;max-height:250px;overflow-y:auto}
+.ac-drop-hdr{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#fff}
+.ac-drop-close{border:none;background:none;color:var(--muted);cursor:pointer;font-size:12px;line-height:1;padding:2px 4px}
+.ac-drop-close:hover{color:var(--danger)}
 .ac-opt{padding:8px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:8px}
 .ac-opt:hover{background:var(--light)}
 .check-btn{background:linear-gradient(135deg,#4f6ef7,#7c3aed);color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;font-family:var(--sans);transition:opacity .15s}
@@ -104,6 +107,8 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-si
 .action-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .act-btn{display:flex;align-items:center;gap:5px;padding:7px 13px;border:1px solid var(--border);border-radius:7px;font-size:12px;cursor:pointer;background:var(--surf);color:var(--text);font-family:var(--sans);transition:all .12s}
 .act-btn:hover{border-color:var(--accent);color:var(--accent)}
+.act-btn-danger{border-color:var(--danger);color:var(--danger)}
+.act-btn-danger:hover{background:#fef2f2}
 
 /* MULTI DRUG */
 .chip-row{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}
@@ -201,6 +206,29 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-si
 .code-box{background:#0f172a;border-radius:8px;padding:12px 14px;font-family:var(--mono);font-size:10px;line-height:1.85;overflow-x:auto;color:#94a3b8;white-space:pre-wrap;word-break:break-word}
 .divider{height:1px;background:var(--border);margin:14px 0}
 .sec-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
+
+/* MOLECULE STRUCTURES */
+.mol-row{display:flex;gap:14px;flex-wrap:wrap}
+.mol-view{flex:1;min-width:220px}
+.mol-label{font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px;text-align:center}
+.mol-box{background:var(--light);border:1px solid var(--border);border-radius:10px;min-height:200px;display:flex;align-items:center;justify-content:center;padding:8px;overflow:hidden}
+.mol-box svg{max-width:100%;height:auto}
+.mol-placeholder{font-size:11px;color:var(--muted);text-align:center;padding:12px}
+
+/* MECHANISM ENRICHMENT */
+.mech-badge{display:inline-block;font-size:10px;font-weight:700;padding:3px 10px;border-radius:8px;background:var(--accent);color:#fff;text-transform:uppercase;letter-spacing:.4px}
+.pathway-box{background:var(--light);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.8;white-space:pre-wrap;color:var(--text)}
+.ai-unverified-note{font-size:10px;font-weight:700;color:var(--warn);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;display:flex;align-items:center;gap:5px}
+
+/* VERIFIED MECHANISM (ChEMBL) */
+.mech-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.mech-card{flex:1;min-width:220px;background:var(--surf);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.mech-card-empty{background:var(--light)}
+.mech-card-title{font-size:12px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.verified-badge{font-size:9px;font-weight:700;background:var(--green);color:#fff;padding:2px 8px;border-radius:8px;text-transform:none;letter-spacing:0}
+.mech-refs{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap}
+.mech-refs a{font-size:10px;color:var(--accent);text-decoration:none;border:1px solid var(--border);padding:2px 8px;border-radius:6px}
+.mech-refs a:hover{border-color:var(--accent)}
 
 @media (max-width: 720px){
   .layout{flex-direction:column}

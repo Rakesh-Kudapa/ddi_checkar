@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { HistorySummary, historyDetailToResult } from "../checker/HistoryList";
+import { HistorySummary, historyDetailToResult, deleteHistoryItems } from "../checker/HistoryList";
 import { InteractionResult, RiskLevel } from "../checker/ResultCard";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
@@ -15,26 +15,68 @@ const FILTERS: { id: Filter; label: string }[] = [
 interface ReportsPanelProps {
   onView: (drugA: string, drugB: string, result: InteractionResult) => void;
   refreshKey: number;
+  onChanged?: () => void;
 }
 
-export function ReportsPanel({ onView, refreshKey }: ReportsPanelProps) {
+export function ReportsPanel({ onView, refreshKey, onChanged }: ReportsPanelProps) {
   const [items, setItems] = useState<HistorySummary[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/history?limit=200`)
       .then((r) => r.json())
       .then((d) => setItems(d.items))
       .catch(() => setItems([]));
+    setSelected(new Set());
   }, [refreshKey]);
 
   const filtered = filter === "all" ? items : items.filter((i) => i.risk_level === filter);
+  const allVisibleSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
 
   async function handleView(item: HistorySummary) {
     const res = await fetch(`${API_BASE}/api/history/${item.id}`);
     if (!res.ok) return;
     const detail = await res.json();
     onView(item.drug_a, item.drug_b, historyDetailToResult(detail));
+  }
+
+  function toggle(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelected((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        filtered.forEach((i) => next.delete(i.id));
+        return next;
+      }
+      const next = new Set(prev);
+      filtered.forEach((i) => next.add(i.id));
+      return next;
+    });
+  }
+
+  async function handleDeleteSelected() {
+    if (selected.size === 0) return;
+    if (!window.confirm(`Delete ${selected.size} selected report${selected.size > 1 ? "s" : ""}? This cannot be undone.`)) {
+      return;
+    }
+    const ids = Array.from(selected);
+    try {
+      await deleteHistoryItems(ids);
+      setItems((prev) => prev.filter((i) => !selected.has(i.id)));
+      setSelected(new Set());
+      onChanged?.();
+    } catch {
+      setError("Could not delete selected reports");
+    }
   }
 
   function exportCsv() {
@@ -56,8 +98,9 @@ export function ReportsPanel({ onView, refreshKey }: ReportsPanelProps) {
     <div>
       <div className="ph">
         <h2>Interaction Reports</h2>
-        <p>All checks logged — filter and export</p>
+        <p>All checks logged — filter, export, or select rows to delete</p>
       </div>
+      {error && <div className="error-banner">{error}</div>}
       <div className="rpt-hdr">
         <div className="pill-group">
           {FILTERS.map((f) => (
@@ -70,7 +113,14 @@ export function ReportsPanel({ onView, refreshKey }: ReportsPanelProps) {
             </button>
           ))}
         </div>
-        <button className="act-btn" onClick={exportCsv}>📥 Export CSV</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {selected.size > 0 && (
+            <button className="act-btn act-btn-danger" onClick={handleDeleteSelected}>
+              🗑 Delete selected ({selected.size})
+            </button>
+          )}
+          <button className="act-btn" onClick={exportCsv}>📥 Export CSV</button>
+        </div>
       </div>
       {filtered.length === 0 ? (
         <div className="empty-note">No checks match this filter yet.</div>
@@ -79,12 +129,16 @@ export function ReportsPanel({ onView, refreshKey }: ReportsPanelProps) {
           <table className="rpt-table">
             <thead>
               <tr>
+                <th style={{ width: 28 }}>
+                  <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
+                </th>
                 <th>Drug A</th><th>Drug B</th><th>Risk</th><th>Provider</th><th>Checked</th><th></th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((i) => (
                 <tr key={i.id}>
+                  <td><input type="checkbox" checked={selected.has(i.id)} onChange={() => toggle(i.id)} /></td>
                   <td>{i.standard_a}</td>
                   <td>{i.standard_b}</td>
                   <td><span className={`tag t-${i.risk_level}`}>{i.risk_level.toUpperCase()}</span></td>
