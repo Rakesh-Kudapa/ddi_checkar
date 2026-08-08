@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { DrugInput } from "./DrugInput";
-import { ResultCard, InteractionResult } from "./ResultCard";
+import { ResultCard, InteractionResult, PatientContext } from "./ResultCard";
+import { PatientContextForm, EMPTY_PATIENT_CONTEXT } from "./PatientContextForm";
 import { LLMSettingsValue } from "../settings/SettingsPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
@@ -22,6 +23,7 @@ interface PairCheckerProps {
 export function PairChecker({ llm, seed, onGoMulti, onChecked }: PairCheckerProps) {
   const [drugA, setDrugA] = useState("");
   const [drugB, setDrugB] = useState("");
+  const [patientContext, setPatientContext] = useState<PatientContext>(EMPTY_PATIENT_CONTEXT);
   const [result, setResult] = useState<InteractionResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +40,7 @@ export function PairChecker({ llm, seed, onGoMulti, onChecked }: PairCheckerProp
         body: JSON.stringify({
           drug_a: a.trim(), drug_b: b.trim(),
           llm_provider: llm.provider, llm_api_key: llm.apiKey.trim(),
+          patient_context: patientContext,
         }),
       });
       if (!res.ok) {
@@ -90,6 +93,8 @@ export function PairChecker({ llm, seed, onGoMulti, onChecked }: PairCheckerProp
           </button>
         </div>
       </div>
+
+      <PatientContextForm value={patientContext} onChange={setPatientContext} />
 
       {!llm.apiKey.trim() && (
         <p className="hint-warning">Add an API key in Settings before running a check.</p>

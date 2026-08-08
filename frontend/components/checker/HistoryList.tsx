@@ -27,6 +27,8 @@ export function historyDetailToResult(detail: any): InteractionResult {
     recommendation: detail.recommendation,
     llm_summary: detail.llm_summary,
     sources: detail.sources,
+    verified_severity: detail.verified_severity,
+    patient_context_used: detail.patient_context_used,
     disclaimer: detail.disclaimer,
   };
 }

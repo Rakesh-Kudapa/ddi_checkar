@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { InteractionResult, RiskLevel, ResultCard } from "./ResultCard";
+import { InteractionResult, RiskLevel, ResultCard, PatientContext } from "./ResultCard";
+import { PatientContextForm, EMPTY_PATIENT_CONTEXT } from "./PatientContextForm";
 import { LLMSettingsValue } from "../settings/SettingsPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
-const MAX_DRUGS = 6;
+const MAX_DRUGS = 12;
 
 export interface MultiSeed {
   drugs: string[];
@@ -19,6 +20,7 @@ interface MultiDrugPanelProps {
 export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
   const [drugs, setDrugs] = useState<string[]>(["Warfarin", "Aspirin"]);
   const [newDrug, setNewDrug] = useState("");
+  const [patientContext, setPatientContext] = useState<PatientContext>(EMPTY_PATIENT_CONTEXT);
   const [pairs, setPairs] = useState<InteractionResult[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +58,7 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           drugs, llm_provider: llm.provider, llm_api_key: llm.apiKey.trim(),
+          patient_context: patientContext,
         }),
       });
       if (!res.ok) {
@@ -84,6 +87,7 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
   pairs?.forEach((p) => counts[p.risk_level]++);
 
   const canSubmit = drugs.length >= 2 && llm.apiKey.trim().length > 0 && !loading;
+  const totalPairs = drugs.length * (drugs.length - 1) / 2;
 
   return (
     <div>
@@ -116,18 +120,24 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
         </button>
       </div>
 
+      <PatientContextForm value={patientContext} onChange={setPatientContext} />
+
       {!llm.apiKey.trim() && (
         <p className="hint-warning">Add an API key in Settings before running a check.</p>
       )}
-      {drugs.length > MAX_DRUGS - 1 && drugs.length <= MAX_DRUGS && (
-        <p className="hint-warning">Max {MAX_DRUGS} drugs per panel ({drugs.length * (drugs.length - 1) / 2} pairs).</p>
+      {drugs.length >= MAX_DRUGS - 2 && drugs.length <= MAX_DRUGS && (
+        <p className="hint-warning">
+          Max {MAX_DRUGS} drugs per panel ({totalPairs} pairs — a panel this size can take
+          several minutes since pairs are processed in bounded batches, not all at once).
+        </p>
       )}
 
       {loading && (
         <div className="loading">
           <div className="spinner" />
           <div style={{ fontSize: 12, color: "var(--muted)" }}>
-            Running {drugs.length * (drugs.length - 1) / 2} pairwise checks concurrently…
+            Running {totalPairs} pairwise check{totalPairs === 1 ? "" : "s"}
+            {totalPairs > 15 ? " — large panels may take several minutes, processed in bounded batches" : ""}…
           </div>
         </div>
       )}

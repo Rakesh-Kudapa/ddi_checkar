@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from backend.routers import interaction
-from backend.cache.sqlite import init_db
+from backend.cache.sqlite import init_db, ensure_ddinter_loaded
 
 logger = logging.getLogger("ddi_checker")
 
@@ -51,6 +51,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.on_event("startup")
 def on_startup():
     init_db()
+    ensure_ddinter_loaded()
 
 app.include_router(interaction.router, prefix="/api")
 

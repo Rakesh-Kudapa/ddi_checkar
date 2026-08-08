@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from backend.models.schemas import (
     InteractionRequest, InteractionResult, AutocompleteResult,
     MultiCheckRequest, MultiCheckResult, HistoryListResult, HistoryDetail,
-    DrugInfoResult, LLMProvider, VerifiedMechanism,
+    DrugInfoResult, LLMProvider, VerifiedMechanism, VerifiedSeverity, PatientContext,
     DeleteHistoryRequest, DeleteHistoryResult,
 )
 from backend.services import rxnorm, rxnav, openfda, llm, rxclass, pubchem, chembl, reportgen
@@ -15,7 +15,8 @@ from backend.cache import sqlite as cache
 
 router = APIRouter()
 
-MAX_MULTI_DRUGS = 6
+MAX_MULTI_DRUGS = 12
+MULTI_CHECK_CONCURRENCY = 6
 
 
 def _describe(e: Exception) -> str:
@@ -24,7 +25,10 @@ def _describe(e: Exception) -> str:
     return f"{type(e).__name__}: {msg}" if msg else type(e).__name__
 
 
-async def run_check(drug_a_name: str, drug_b_name: str, provider: LLMProvider, api_key: str) -> InteractionResult:
+async def run_check(
+    drug_a_name: str, drug_b_name: str, provider: LLMProvider, api_key: str,
+    patient_context: PatientContext | None = None,
+) -> InteractionResult:
     """Core resolve -> DDI data -> LLM synthesis flow, shared by /check and /check-multi.
 
     Every upstream call (RxNorm/RxNav/OpenFDA/LLM) is wrapped so failures
@@ -69,7 +73,7 @@ async def run_check(drug_a_name: str, drug_b_name: str, provider: LLMProvider, a
         result = await llm.synthesize(
             drug_a=drug_a, drug_b=drug_b,
             ddi_data=ddi_data, label_a=label_a, label_b=label_b,
-            provider=provider, api_key=api_key
+            provider=provider, api_key=api_key, patient_context=patient_context,
         )
     except llm.LLMAuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -80,6 +84,31 @@ async def run_check(drug_a_name: str, drug_b_name: str, provider: LLMProvider, a
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"LLM provider request failed: {_describe(e)}")
 
+    # Independent of the LLM entirely — a real severity rating from
+    # DDInter's curated dataset (ddinter_reference table), attached only
+    # when a match exists. See backend/data/ddinter/README.md.
+    severity_level = cache.get_verified_severity(drug_a.standard_name, drug_b.standard_name)
+    if not severity_level:
+        # Exact name match failed — DDInter sometimes uses a different name
+        # than RxNorm's (confirmed: DDInter has "Acetylsalicylic acid" where
+        # we have "Aspirin"). Try PubChem's synonym list before giving up;
+        # a PubChem outage here shouldn't fail the whole check, so it's
+        # caught locally rather than propagating.
+        try:
+            synonyms_a = await pubchem.get_synonyms(drug_a.standard_name)
+            synonyms_b = await pubchem.get_synonyms(drug_b.standard_name)
+        except httpx.HTTPError:
+            synonyms_a, synonyms_b = [], []
+        for name_a in [drug_a.standard_name] + synonyms_a:
+            if severity_level:
+                break
+            for name_b in [drug_b.standard_name] + synonyms_b:
+                severity_level = cache.get_verified_severity(name_a, name_b)
+                if severity_level:
+                    break
+    if severity_level:
+        result = result.model_copy(update={"verified_severity": VerifiedSeverity(level=severity_level)})
+
     return result
 
 
@@ -88,7 +117,10 @@ async def check_interaction(req: InteractionRequest):
     if not req.llm_api_key.strip():
         raise HTTPException(status_code=400, detail="Missing LLM API key — add one in Settings")
 
-    result = await run_check(req.drug_a, req.drug_b, req.llm_provider, req.llm_api_key)
+    result = await run_check(
+        req.drug_a, req.drug_b, req.llm_provider, req.llm_api_key,
+        patient_context=req.patient_context,
+    )
     cache.save_history(result, req.llm_provider.value)
     return result
 
@@ -105,9 +137,20 @@ async def check_multi(req: MultiCheckRequest):
         raise HTTPException(status_code=400, detail=f"Max {MAX_MULTI_DRUGS} drugs per panel")
 
     pairs = list(itertools.combinations(names, 2))
-    results = await asyncio.gather(
-        *(run_check(a, b, req.llm_provider, req.llm_api_key) for a, b in pairs)
-    )
+
+    # Bounded concurrency: a 12-drug panel is 66 pairs — firing all of them
+    # at once via bare asyncio.gather would mean 66 simultaneous LLM calls.
+    # Cap concurrent in-flight pairs regardless of panel size.
+    semaphore = asyncio.Semaphore(MULTI_CHECK_CONCURRENCY)
+
+    async def bounded_check(a: str, b: str) -> InteractionResult:
+        async with semaphore:
+            return await run_check(
+                a, b, req.llm_provider, req.llm_api_key,
+                patient_context=req.patient_context,
+            )
+
+    results = await asyncio.gather(*(bounded_check(a, b) for a, b in pairs))
 
     for result in results:
         cache.save_history(result, req.llm_provider.value)

@@ -40,6 +40,21 @@ def _esc_attr(text: str) -> str:
     return _xml_quoteattr(text)
 
 
+def _describe_patient_context(pc) -> str:
+    parts = []
+    if pc.age is not None:
+        parts.append(f"age {pc.age}")
+    if pc.renal_function:
+        parts.append(f"renal: {pc.renal_function}")
+    if pc.hepatic_function:
+        parts.append(f"hepatic: {pc.hepatic_function}")
+    if pc.pregnant is not None:
+        parts.append("pregnant" if pc.pregnant else "not pregnant")
+    if pc.other_conditions:
+        parts.append(pc.other_conditions)
+    return ", ".join(parts)
+
+
 def build_pdf(result: InteractionResult) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
@@ -57,6 +72,23 @@ def build_pdf(result: InteractionResult) -> bytes:
         Paragraph("Drug-Drug Interaction Report", h1),
         Paragraph(f"{_esc(result.drug_a.standard_name)} + {_esc(result.drug_b.standard_name)}", body),
         Paragraph(f"Risk level: {_esc(result.risk_level.value.upper())}", risk_style),
+    ]
+
+    if result.verified_severity:
+        story.append(Paragraph(
+            f"Verified severity ({_esc(result.verified_severity.source)}): "
+            f"{_esc(result.verified_severity.level.upper())}", body
+        ))
+    else:
+        story.append(Paragraph(
+            "No DDInter-verified severity found for this pair — risk level above is AI-assessed only.", small
+        ))
+    if result.patient_context_used:
+        story.append(Paragraph(
+            f"Assessed with patient context: {_esc(_describe_patient_context(result.patient_context_used))}", small
+        ))
+
+    story += [
         Paragraph("Summary", h2),
         Paragraph(_esc(result.llm_summary), body),
         Paragraph("Mechanism — Verified (ChEMBL)", h2),
@@ -95,8 +127,14 @@ def build_pdf(result: InteractionResult) -> bytes:
     story.append(Paragraph(_esc(result.recommendation), body))
 
     story.append(Paragraph("Sources", h2))
-    if result.sources:
-        items = [
+    if result.sources or result.verified_severity:
+        items = []
+        if result.verified_severity:
+            items.append(ListItem(Paragraph(
+                'DDInter 2.0 (severity rating, CC BY-NC-SA 4.0) — '
+                '<a href="https://ddinter.scbdd.com" color="blue">https://ddinter.scbdd.com</a>', body
+            )))
+        items += [
             ListItem(Paragraph(f'{_esc(s.name)} — <a href={_esc_attr(s.url)} color="blue">{_esc(s.url)}</a>', body))
             for s in result.sources
         ]
@@ -124,6 +162,23 @@ def build_docx(result: InteractionResult) -> bytes:
     risk_run = risk_p.add_run(f"Risk level: {result.risk_level.value.upper()}")
     risk_run.bold = True
     risk_run.font.color.rgb = RISK_RGB.get(result.risk_level.value, RGBColor(0x47, 0x55, 0x69))
+
+    if result.verified_severity:
+        doc.add_paragraph(
+            f"Verified severity ({result.verified_severity.source}): {result.verified_severity.level.upper()}"
+        )
+    else:
+        note = doc.add_paragraph().add_run(
+            "No DDInter-verified severity found for this pair — risk level above is AI-assessed only."
+        )
+        note.italic = True
+        note.font.size = Pt(9)
+    if result.patient_context_used:
+        ctx = doc.add_paragraph().add_run(
+            f"Assessed with patient context: {_describe_patient_context(result.patient_context_used)}"
+        )
+        ctx.italic = True
+        ctx.font.size = Pt(9)
 
     doc.add_heading("Summary", level=2)
     doc.add_paragraph(result.llm_summary)
@@ -155,7 +210,12 @@ def build_docx(result: InteractionResult) -> bytes:
     doc.add_paragraph(result.recommendation)
 
     doc.add_heading("Sources", level=2)
-    if result.sources:
+    if result.sources or result.verified_severity:
+        if result.verified_severity:
+            doc.add_paragraph(
+                "DDInter 2.0 (severity rating, CC BY-NC-SA 4.0) — https://ddinter.scbdd.com",
+                style="List Bullet"
+            )
         for s in result.sources:
             doc.add_paragraph(f"{s.name} — {s.url}", style="List Bullet")
     else:

@@ -27,6 +27,19 @@ export interface InteractionSource {
   url: string;
 }
 
+export interface VerifiedSeverity {
+  level: string;
+  source: string;
+}
+
+export interface PatientContext {
+  age: number | null;
+  renal_function: string | null;
+  hepatic_function: string | null;
+  pregnant: boolean | null;
+  other_conditions: string | null;
+}
+
 export type RiskLevel = "low" | "moderate" | "high" | "unknown";
 export type MechanismType = "PK" | "PD" | "both" | "unknown";
 
@@ -42,7 +55,19 @@ export interface InteractionResult {
   recommendation: string;
   llm_summary: string;
   sources: InteractionSource[];
+  verified_severity: VerifiedSeverity | null;
+  patient_context_used: PatientContext | null;
   disclaimer: string;
+}
+
+function describePatientContext(pc: PatientContext): string {
+  const parts: string[] = [];
+  if (pc.age != null) parts.push(`age ${pc.age}`);
+  if (pc.renal_function) parts.push(`renal: ${pc.renal_function}`);
+  if (pc.hepatic_function) parts.push(`hepatic: ${pc.hepatic_function}`);
+  if (pc.pregnant != null) parts.push(pc.pregnant ? "pregnant" : "not pregnant");
+  if (pc.other_conditions) parts.push(pc.other_conditions);
+  return parts.join(", ");
 }
 
 const RISK_ICON: Record<RiskLevel, string> = {
@@ -73,9 +98,10 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
   const [exporting, setExporting] = useState<"pdf" | "docx" | null>(null);
 
   function exportCsv() {
-    const header = "drug_a,drug_b,risk_level,mechanism,mechanism_type,targets_involved,pathway,clinical_effect,recommendation";
+    const header = "drug_a,drug_b,risk_level,verified_severity,mechanism,mechanism_type,targets_involved,pathway,clinical_effect,recommendation";
     const row = [
       result.drug_a.standard_name, result.drug_b.standard_name, result.risk_level,
+      result.verified_severity ? `${result.verified_severity.level} (${result.verified_severity.source})` : "not found",
       result.mechanism, result.mechanism_type, result.targets_involved.join("; "),
       result.pathway, result.clinical_effect, result.recommendation,
     ].map((v) => `"${v.replace(/"/g, '""')}"`).join(",");
@@ -103,6 +129,9 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
 
   function copyCitation() {
     const lines = result.sources.map((s) => `${s.name}. ${s.url}`);
+    if (result.verified_severity) {
+      lines.unshift("DDInter 2.0 (severity rating, CC BY-NC-SA 4.0). https://ddinter.scbdd.com");
+    }
     const text = lines.length
       ? lines.join("\n")
       : "No independently-cited sources — this result relied on the LLM's own pharmacology knowledge.";
@@ -137,6 +166,22 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
 
           {tab === "summary" && (
             <div className="rpanel">
+              <div style={{ marginBottom: 12 }}>
+                {result.verified_severity ? (
+                  <span className="verified-badge" style={{ fontSize: 11, padding: "4px 10px" }}>
+                    ✓ Verified severity ({result.verified_severity.source}): {result.verified_severity.level.toUpperCase()}
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                    No DDInter-verified severity found for this pair — risk level above is AI-assessed only.
+                  </span>
+                )}
+              </div>
+              {result.patient_context_used && (
+                <div className="locked-note" style={{ marginBottom: 12 }}>
+                  🧑‍⚕️ Assessed with patient context: {describePatientContext(result.patient_context_used)}
+                </div>
+              )}
               <p className="summary-p">{result.llm_summary}</p>
               <div className="divider" />
               <div className="disclaimer">⚠ {result.disclaimer}</div>
@@ -215,8 +260,16 @@ export function ResultCard({ result, onGoMulti }: ResultCardProps) {
 
           {tab === "sources" && (
             <div className="rpanel">
-              {result.sources.length > 0 ? (
+              {result.sources.length > 0 || result.verified_severity ? (
                 <div className="src-list">
+                  {result.verified_severity && (
+                    <div className="src-item">
+                      <span className="src-name">DDInter 2.0 (severity rating, CC BY-NC-SA 4.0)</span>
+                      <a className="src-url" href="https://ddinter.scbdd.com" target="_blank" rel="noreferrer">
+                        https://ddinter.scbdd.com
+                      </a>
+                    </div>
+                  )}
                   {result.sources.map((s) => (
                     <div className="src-item" key={s.name}>
                       <span className="src-name">{s.name}</span>

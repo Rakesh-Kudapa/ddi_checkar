@@ -2,7 +2,7 @@ import json
 import httpx
 from backend.models.schemas import (
     DrugResolved, InteractionResult, InteractionSource, LLMProvider,
-    MechanismType, RiskLevel
+    MechanismType, PatientContext, RiskLevel
 )
 
 SYSTEM_PROMPT = """You are a clinical pharmacology assistant.
@@ -139,6 +139,7 @@ async def synthesize(
     label_b: str,
     provider: LLMProvider,
     api_key: str,
+    patient_context: PatientContext | None = None,
 ) -> InteractionResult:
     """Send all gathered data to the chosen LLM provider, return structured InteractionResult."""
 
@@ -148,6 +149,28 @@ async def synthesize(
         "the FDA label text below and your own pharmacology knowledge instead.)"
         if not ddi_data["interactions"] else ""
     )
+
+    patient_block = ""
+    if patient_context and any([
+        patient_context.age, patient_context.renal_function, patient_context.hepatic_function,
+        patient_context.pregnant is not None, patient_context.other_conditions,
+    ]):
+        fields = []
+        if patient_context.age is not None:
+            fields.append(f"Age: {patient_context.age}")
+        if patient_context.renal_function:
+            fields.append(f"Renal function: {patient_context.renal_function}")
+        if patient_context.hepatic_function:
+            fields.append(f"Hepatic function: {patient_context.hepatic_function}")
+        if patient_context.pregnant is not None:
+            fields.append(f"Pregnant: {'yes' if patient_context.pregnant else 'no'}")
+        if patient_context.other_conditions:
+            fields.append(f"Other conditions: {patient_context.other_conditions}")
+        patient_block = (
+            "\nPatient context (factor this into clinical_effect, recommendation, and "
+            "risk_level — a patient-specific risk assessment, not a generic drug-drug "
+            f"baseline):\n{chr(10).join(fields)}\n"
+        )
 
     user_prompt = f"""
 Drug A: {drug_a.standard_name} (RxCUI: {drug_a.rxcui})
@@ -162,7 +185,7 @@ FDA label interactions — {drug_a.standard_name}:
 
 FDA label interactions — {drug_b.standard_name}:
 {label_b or "No FDA label data found"}
-
+{patient_block}
 Return a JSON object with exactly these fields:
 {{
   "risk_level": "low" | "moderate" | "high" | "unknown",
@@ -219,5 +242,6 @@ Return a JSON object with exactly these fields:
         clinical_effect=parsed["clinical_effect"],
         recommendation=parsed["recommendation"],
         llm_summary=parsed["llm_summary"],
-        sources=sources
+        sources=sources,
+        patient_context_used=patient_context if patient_block else None,
     )

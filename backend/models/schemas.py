@@ -29,6 +29,17 @@ class VerifiedMechanism(BaseModel):
     mechanism_of_action: str
     references: List[MechanismReference]
 
+class VerifiedSeverity(BaseModel):
+    level: str
+    source: str = "DDInter"
+
+class PatientContext(BaseModel):
+    age: Optional[int] = None
+    renal_function: Optional[str] = None
+    hepatic_function: Optional[str] = None
+    pregnant: Optional[bool] = None
+    other_conditions: Optional[str] = None
+
 class DrugResolved(BaseModel):
     name: str               # original user input
     rxcui: Optional[str]    # resolved RxCUI ID
@@ -46,6 +57,7 @@ class InteractionRequest(BaseModel):
     drug_b: str
     llm_provider: LLMProvider
     llm_api_key: str
+    patient_context: Optional[PatientContext] = None
 
 class InteractionResult(BaseModel):
     drug_a: DrugResolved
@@ -59,6 +71,8 @@ class InteractionResult(BaseModel):
     recommendation: str
     llm_summary: str
     sources: List[InteractionSource]
+    verified_severity: Optional[VerifiedSeverity] = None
+    patient_context_used: Optional[PatientContext] = None
     disclaimer: str = (
         "This tool is for research and informational purposes only. "
         "It does not constitute medical advice. Always consult a licensed "
@@ -72,6 +86,7 @@ class MultiCheckRequest(BaseModel):
     drugs: List[str]
     llm_provider: LLMProvider
     llm_api_key: str
+    patient_context: Optional[PatientContext] = None
 
 class MultiCheckResult(BaseModel):
     pairs: List[InteractionResult]
@@ -108,6 +123,8 @@ class HistoryDetail(BaseModel):
     recommendation: str
     llm_summary: str
     sources: List[InteractionSource]
+    verified_severity: Optional[VerifiedSeverity] = None
+    patient_context_used: Optional[PatientContext] = None
     disclaimer: str
     provider: str
     created_at: str

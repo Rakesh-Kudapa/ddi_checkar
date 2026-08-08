@@ -99,6 +99,16 @@ export function SettingsPanel({ value, onChange }: SettingsPanelProps) {
             <span><span className="status-dot ok" />OpenFDA drug labels</span>
           </div>
           <div className="set-row">
+            <span><span className="status-dot ok" />ChEMBL (verified mechanism + citations)</span>
+          </div>
+          <div className="set-row">
+            <span><span className="status-dot ok" />DDInter (verified severity)</span>
+            <span className="v2-badge" style={{ background: "var(--light)" }}>CC BY-NC-SA</span>
+          </div>
+          <div className="set-row">
+            <span><span className="status-dot ok" />PubChem (2D structures)</span>
+          </div>
+          <div className="set-row">
             <span><span className="status-dot dead" />RxNav interaction API</span>
             <span className="v2-badge">RETIRED</span>
           </div>
@@ -112,8 +122,10 @@ export function SettingsPanel({ value, onChange }: SettingsPanelProps) {
           </div>
           <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10, lineHeight: 1.5 }}>
             RxNav's Drug Interaction API was retired by NLM after it lost redistribution
-            rights to its source databases — structured severity data now comes from
-            OpenFDA label text plus the LLM's own pharmacology knowledge.
+            rights to its source databases. Structured severity (DDInter) and mechanism
+            (ChEMBL) data now come from independent curated databases where a match
+            exists, supplemented by OpenFDA label text and the LLM's own pharmacology
+            knowledge where it doesn't.
           </p>
         </div>
 
