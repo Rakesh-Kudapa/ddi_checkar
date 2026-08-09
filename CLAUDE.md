@@ -213,6 +213,99 @@ FAERS adverse-event overlay yet; the 12-drug panel cap will occasionally bind fo
 polypharmacy cases. None of these are silent — all are disclosed in the UI or here — which
 is what separates them from the bugs this cycle fixed.
 
+## Third Review Cycle (2026-08-09) — live-usage bug report, all fixed
+
+The user reported two things from actually using the app: (1) drugs pre-filled in the Pair
+Checker were firing an LLM call with no explicit user action, wasting tokens, and there was
+no way to stop a check once started; (2) a live Gemini 503 error surfaced with the user's
+own real API key exposed in plaintext in the error message shown in the browser.
+
+**Security: the user's real Gemini API key leaked via an unhandled-error message —
+rotate it if you haven't.** Root cause: `_call_gemini` in `llm.py` sent the key as a
+`?key=...` URL query parameter; `httpx.HTTPStatusError`'s string form includes the full
+request URL, so any unhandled non-2xx status (confirmed live via a real transient 503)
+put the raw key straight into the `HTTPException` detail returned to the browser — and
+from there into this exact conversation, pasted by the user while reporting the bug. The
+key in question (`AQ.Ab8RN6...`) matches one already flagged as compromised in project
+memory from an earlier session — this is at least the second time it's been exposed.
+**Told the user to rotate it in Google AI Studio; confirm this happened before assuming
+the key is safe to use.** Fixed two ways: (1) root cause — `_call_gemini` now sends the
+key via the `x-goog-api-key` HEADER instead of the URL (confirmed via Google's own docs
+that this is supported), so it can never appear in a URL-derived error string again; (2)
+defense in depth — `interaction.py`'s new `_redact()` strips any `key=`/`api_key=`/
+`token=`-shaped query param out of every error message before it reaches an
+`HTTPException` detail, catching this class of bug for any other current or future call
+site (e.g. OpenFDA's optional server-side `OPENFDA_API_KEY`, which was never actually
+exposed but shares the same risk shape).
+
+**Resilience: transient 5xx from an LLM provider now retries automatically.** The
+reported 503 was Google's own "model overloaded, retry" signal, not a real failure —
+`llm.py`'s `_call_with_retry` now retries up to twice (1s, then 3s backoff) on 502/503/504
+before giving up, for both the initial request and the JSON-retry-on-parse-failure path.
+
+**Pair Checker no longer auto-runs a check.** `PairChecker.tsx`'s seed effect (fired by a
+Sidebar quick-pair or a "+ Multi-drug" jump) used to immediately call the LLM the moment
+fields were pre-filled — the user never asked for that specific check, so it was pure
+wasted spend if they meant to edit the drugs first. It now only populates the fields;
+`runCheck` fires only from an explicit "Check" click or Enter in the form.
+
+**Both Pair Checker and Multi-Drug Panel gained a real Stop button.** Previously there was
+no way to cancel a check once started — closing the tab or waiting it out were the only
+options, and the backend kept running (and spending tokens) regardless of what the browser
+did. Now: the frontend `AbortController`-aborts the fetch, which disconnects the backend's
+request; a new `_run_cancelable()` wrapper in `interaction.py` polls
+`request.is_disconnected()` while the real work runs as a task, and calls `task.cancel()`
+on disconnect — this propagates a real `asyncio.CancelledError` into whatever's currently
+awaiting (RxNorm, OpenFDA, PubChem, ChEMBL, or the LLM call itself), actually stopping
+in-flight work server-side rather than just abandoning it client-side. Applied to both
+`/api/check` and `/api/check-multi` (the latter cancels the whole `asyncio.gather` batch —
+pairs already completed before the stop did spend tokens and aren't recoverable, since the
+endpoint is all-or-nothing per request; nothing not yet started or still in flight does).
+Verified live: a cancelled request produces no stray `history` row and the server stays
+fully responsive afterward.
+
+## Multi-User Deployment: History Isolation (2026-08-09)
+
+User asked, before deploying and sharing the link: would one user's LLM API key be
+exposed to another user? Verified in code: **no** — keys live only in each browser's own
+`localStorage` (`SettingsPanel.tsx`), are passed as a plain function argument through the
+whole call chain (`run_check` → `llm.synthesize` → `_call_*`) with no server-side storage
+or global/module-level state, and are never logged (`main.py`'s exception handler logs
+only method+path) or echoed back in any response model. Two different browsers hitting
+the same deployed backend never share a key — this was already correct by construction.
+
+**What actually wasn't isolated: History and Reports.** There was no `user_id`/session
+concept anywhere — the `history` table had no such column, `GET /api/history` returned
+everything to any caller, `DELETE /api/history` could delete any row by id with no
+ownership check. On a shared deployed link, every visitor would see every other visitor's
+checked drug pairs **and any patient context they entered** (age, renal/hepatic function,
+pregnancy status, other conditions) — a real privacy gap, not a hypothetical one.
+
+**Fix (user's explicit choice among four options presented — see the "Ask before
+clinical/privacy-framing defaults" pattern in project memory): per-browser client ID,
+not full authentication.** `frontend/lib/clientId.ts`'s `getClientId()` generates a random
+id (`crypto.randomUUID()`) once per browser, persists it in `localStorage`
+(`ddi_client_id`), and every history-touching fetch sends it as an `X-Client-Id` header
+(`clientIdHeader()`, attached in `PairChecker.tsx`, `MultiDrugPanel.tsx`,
+`HistoryList.tsx`, `ReportsPanel.tsx`). Backend: `interaction.py`'s `_client_id(request)`
+reads the header (falling back to a shared `""` bucket if absent, e.g. a direct API call
+— keeps the API usable without the header rather than erroring); `sqlite.py`'s
+`save_history`/`list_history`/`get_history_item`/`delete_history_items` all now take and
+filter by `client_id`. A cross-client fetch-by-id returns 404 (not a different error),
+so it doesn't leak whether another client's id exists. `history` gained a `client_id`
+column (migrated; existing pre-migration rows have it `NULL`, which never matches any
+real client_id in a `=?` filter, so they simply stop appearing to anyone rather than
+being misattributed — the safe failure direction).
+
+**Explicitly not real security — disclosed, not hidden.** This is trivially spoofable by
+anyone calling the API directly (nothing stops sending a fabricated `X-Client-Id`), and
+doesn't survive a user clearing browser data (a fresh id gets generated, orphaning their
+old history the same way a pre-migration row is orphaned). It solves the actual reported
+risk — casual co-users of a shared link not seeing each other's checks and patient
+context by default — without the much larger lift of real accounts/login. If this app is
+ever deployed somewhere an adversarial user (not just a casual co-user) could access it,
+this is not sufficient and real authentication would be needed instead.
+
 ## Architecture
 ```
 User input (drug names, optional patient context)
@@ -308,7 +401,8 @@ ddi-checker/
 │   │   └── settings/        ← SettingsPanel (LLM key + data source status)
 │   ├── lib/
 │   │   ├── useRdkit.ts      ← lazy-loads RDKit.js from CDN (not an npm dep — see docs/api_notes.md)
-│   │   └── useDataSourceStatus.ts ← polls GET /api/status every 60s for live status badges
+│   │   ├── useDataSourceStatus.ts ← polls GET /api/status every 60s for live status badges
+│   │   └── clientId.ts      ← per-browser id sent as X-Client-Id for History isolation
 │   └── styles/globals.css
 └── docs/
     └── api_notes.md         ← every API quirk found this session — read before touching
@@ -385,6 +479,9 @@ ddi-checker/
 - `backend/main.py`'s CORS is driven by `ALLOWED_ORIGINS` (comma-separated), defaulting to
   `http://localhost:4127` only — a production deploy without this set correctly will
   (correctly) reject browser requests rather than silently allow an unknown origin.
+- History/Reports are isolated per-browser via `X-Client-Id` (see "Multi-User Deployment:
+  History Isolation" above) — read that before sharing a deployed link with more than one
+  person. It's good enough for casual co-users, not for an adversarial one.
 
 ## Environment Variables
 ```

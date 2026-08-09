@@ -50,6 +50,23 @@
 - Always request JSON-only output to avoid parsing issues
 - If JSON parse fails, retry once with stricter prompt before raising error
 - A 401/403 from any provider surfaces as `LLMAuthError` → HTTP 401 to the frontend (bad/expired key)
+- Transient 502/503/504 from any provider is retried automatically (up to twice, 1s/3s
+  backoff — `llm.py`'s `_call_with_retry`) before raising — Google's own docs describe a
+  Gemini 503 as "model overloaded, retry," not a real failure, and this was confirmed live
+  (2026-08-08/09): a real transient 503 surfaced straight to the user with no retry attempted.
+
+### Gemini's API key MUST go in a header, never a URL query param (found 2026-08-09)
+- `_call_gemini` originally sent the key as `?key=...` in the request URL. Any unhandled
+  non-2xx response raises `httpx.HTTPStatusError`, whose `str()` includes the full request
+  URL — so the raw key ended up in the `HTTPException` detail shown to the user in the
+  browser on any unhandled error (confirmed live via a real transient 503). Fixed by
+  sending the key via the `x-goog-api-key` HEADER instead (confirmed supported via Google's
+  own docs) — headers never appear in that exception string. **General lesson for any
+  future provider/service integration in this codebase: never put a secret in a URL query
+  string if a header option exists, specifically because of how `httpx`/most HTTP client
+  exceptions stringify.** `backend/routers/interaction.py`'s `_redact()` is a defense-in-depth
+  backstop that strips `key=`/`api_key=`/`token=`-shaped query params from any error message
+  before it reaches an `HTTPException` detail, for any call site that isn't fixed this way.
 
 ### Gemini model pinning bites fast (found 2026-08-07)
 - `gemini-2.5-flash` was picked as the default model, tested working via

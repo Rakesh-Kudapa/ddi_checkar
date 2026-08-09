@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { InteractionResult, RiskLevel, ResultCard, PatientContext } from "./ResultCard";
 import { PatientContextForm, EMPTY_PATIENT_CONTEXT } from "./PatientContextForm";
 import { LLMSettingsValue } from "../settings/SettingsPanel";
+import { clientIdHeader } from "../../lib/clientId";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
 const MAX_DRUGS = 12;
@@ -24,7 +25,9 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
   const [pairs, setPairs] = useState<InteractionResult[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stopped, setStopped] = useState(false);
   const [expanded, setExpanded] = useState<InteractionResult | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!seed) return;
@@ -58,18 +61,22 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
 
   async function checkAllPairs() {
     if (drugs.length < 2 || !llm.apiKey.trim()) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(null);
+    setStopped(false);
     setPairs(null);
     setExpanded(null);
     try {
       const res = await fetch(`${API_BASE}/api/check-multi`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...clientIdHeader() },
         body: JSON.stringify({
           drugs, llm_provider: llm.provider, llm_api_key: llm.apiKey.trim(),
           patient_context: patientContext,
         }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -79,10 +86,22 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
       setPairs(data.pairs);
       onChecked?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // See PairChecker.tsx / backend's _run_cancelable — this cancels
+        // whichever pair checks are still in flight server-side too, not
+        // just the browser's wait.
+        setStopped(true);
+      } else {
+        setError(err instanceof Error ? err.message : "Something went wrong");
+      }
     } finally {
       setLoading(false);
+      abortRef.current = null;
     }
+  }
+
+  function stopCheck() {
+    abortRef.current?.abort();
   }
 
   function findPair(a: string, b: string): InteractionResult | undefined {
@@ -132,9 +151,13 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
           />
           <button className="act-btn" onClick={addDrug} disabled={drugs.length >= MAX_DRUGS}>+ Add</button>
         </div>
-        <button className="check-btn" disabled={!canSubmit} onClick={checkAllPairs}>
-          ⚡ {loading ? "Checking all pairs…" : "Check All Pairs"}
-        </button>
+        {loading ? (
+          <button className="check-btn stop-btn" onClick={stopCheck}>⏹ Stop</button>
+        ) : (
+          <button className="check-btn" disabled={!canSubmit} onClick={checkAllPairs}>
+            ⚡ Check All Pairs
+          </button>
+        )}
       </div>
 
       <PatientContextForm value={patientContext} onChange={setPatientContext} />
@@ -160,6 +183,14 @@ export function MultiDrugPanel({ llm, seed, onChecked }: MultiDrugPanelProps) {
       )}
 
       {error && <div className="error-banner">{error}</div>}
+      {stopped && !loading && (
+        <div className="locked-note">
+          ⏹ Check stopped — any pairs still in flight or not yet started were cancelled
+          server-side. Pairs that had already finished before you stopped did spend tokens,
+          but this batch's results aren't saved or shown (all-or-nothing per request) — re-run
+          if you need them.
+        </div>
+      )}
 
       {pairs && !loading && (
         <>

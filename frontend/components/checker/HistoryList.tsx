@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { InteractionResult, RiskLevel } from "./ResultCard";
+import { clientIdHeader } from "../../lib/clientId";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
 
@@ -38,7 +39,7 @@ export function historyDetailToResult(detail: any): InteractionResult {
 export async function deleteHistoryItems(ids: number[]): Promise<number> {
   const res = await fetch(`${API_BASE}/api/history`, {
     method: "DELETE",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...clientIdHeader() },
     body: JSON.stringify({ ids }),
   });
   if (!res.ok) throw new Error("Delete failed");
@@ -66,7 +67,7 @@ export function HistoryList({ onSelect, refreshKey, onChanged }: HistoryListProp
   }, [refreshKey]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/history?limit=${limit}`)
+    fetch(`${API_BASE}/api/history?limit=${limit}`, { headers: clientIdHeader() })
       .then((r) => r.json())
       .then((d) => { setItems(d.items); setTotal(d.total); })
       .catch(() => setError("Could not load history"));
@@ -75,7 +76,7 @@ export function HistoryList({ onSelect, refreshKey, onChanged }: HistoryListProp
   }, [refreshKey, limit]);
 
   async function handleClick(item: HistorySummary) {
-    const res = await fetch(`${API_BASE}/api/history/${item.id}`);
+    const res = await fetch(`${API_BASE}/api/history/${item.id}`, { headers: clientIdHeader() });
     if (!res.ok) return;
     const detail = await res.json();
     onSelect(item.drug_a, item.drug_b, historyDetailToResult(detail));

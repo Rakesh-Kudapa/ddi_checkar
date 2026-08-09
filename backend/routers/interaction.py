@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import itertools
 import json
+import re
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from backend.models.schemas import (
     InteractionRequest, InteractionResult, AutocompleteResult,
@@ -19,10 +21,61 @@ MAX_MULTI_DRUGS = 12
 MULTI_CHECK_CONCURRENCY = 6
 
 
+_SECRET_QUERY_PARAM = re.compile(r"([?&](?:key|api_key|apikey|token)=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact(msg: str) -> str:
+    """Strips API-key-shaped query params out of an error message before it
+    ever reaches an HTTPException detail (i.e. the browser). Found live
+    2026-08-08: httpx.HTTPStatusError's string form includes the full
+    request URL, so a request built with a key in the query string (Gemini
+    used to; OpenFDA's optional server-side key still can) leaked that key
+    straight into the UI on any unhandled non-2xx status. Gemini itself was
+    fixed to use a header instead (see llm.py), but this is the backstop for
+    every other current or future call site that might put a secret in a URL."""
+    return _SECRET_QUERY_PARAM.sub(r"\1***REDACTED***", msg)
+
+
 def _describe(e: Exception) -> str:
     """httpx timeout/connection errors often stringify to '' — always name the type."""
     msg = str(e)
-    return f"{type(e).__name__}: {msg}" if msg else type(e).__name__
+    return _redact(f"{type(e).__name__}: {msg}" if msg else type(e).__name__)
+
+
+def _client_id(request: Request) -> str:
+    """Opaque per-browser id the frontend generates once and stores in
+    localStorage (frontend/lib/clientId.ts), sent as X-Client-Id on every
+    history-touching request. Not authentication — trivially spoofable by
+    anyone hitting the API directly — but it stops a shared deployed link
+    from showing every visitor's checks (including patient context) to
+    every other visitor by default, which was the actual reported risk.
+    Missing header (e.g. a direct API call) falls back to a shared ""
+    bucket rather than erroring, so the API stays usable without the header."""
+    return request.headers.get("x-client-id", "") or ""
+
+
+async def _run_cancelable(coro, request: Request, poll_interval: float = 0.4):
+    """Runs `coro` as a task while polling for client disconnect, so clicking
+    "Stop" in the UI (an AbortController-aborted fetch) actually cancels the
+    in-flight work server-side — including a Gemini/Anthropic/Grok call
+    already in progress — instead of the backend finishing it (and spending
+    the tokens) regardless while the browser has already given up waiting.
+    Reported 2026-08-08: pre-filled/quick-pair checks could fire without
+    the user meaning to start one, with no way to stop a running check."""
+    task = asyncio.ensure_future(coro)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=poll_interval)
+            if task in done:
+                return task.result()
+            if await request.is_disconnected():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                raise HTTPException(status_code=499, detail="Check cancelled by client")
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
 
 
 async def run_check(
@@ -125,22 +178,25 @@ async def run_check(
 
 
 @router.post("/check", response_model=InteractionResult)
-async def check_interaction(req: InteractionRequest):
+async def check_interaction(req: InteractionRequest, request: Request):
     if not req.llm_api_key.strip():
         raise HTTPException(status_code=400, detail="Missing LLM API key — add one in Settings")
     if req.drug_a.strip().lower() == req.drug_b.strip().lower():
         raise HTTPException(status_code=400, detail="Drug A and Drug B must be different drugs")
 
-    result = await run_check(
-        req.drug_a, req.drug_b, req.llm_provider, req.llm_api_key,
-        patient_context=req.patient_context,
+    result = await _run_cancelable(
+        run_check(
+            req.drug_a, req.drug_b, req.llm_provider, req.llm_api_key,
+            patient_context=req.patient_context,
+        ),
+        request,
     )
-    cache.save_history(result, req.llm_provider.value)
+    cache.save_history(result, req.llm_provider.value, _client_id(request))
     return result
 
 
 @router.post("/check-multi", response_model=MultiCheckResult)
-async def check_multi(req: MultiCheckRequest):
+async def check_multi(req: MultiCheckRequest, request: Request):
     if not req.llm_api_key.strip():
         raise HTTPException(status_code=400, detail="Missing LLM API key — add one in Settings")
 
@@ -173,31 +229,34 @@ async def check_multi(req: MultiCheckRequest):
                 patient_context=req.patient_context,
             )
 
-    results = await asyncio.gather(*(bounded_check(a, b) for a, b in pairs))
+    results = await _run_cancelable(
+        asyncio.gather(*(bounded_check(a, b) for a, b in pairs)), request
+    )
 
+    cid = _client_id(request)
     for result in results:
-        cache.save_history(result, req.llm_provider.value)
+        cache.save_history(result, req.llm_provider.value, cid)
 
     return MultiCheckResult(pairs=results)
 
 
 @router.get("/history", response_model=HistoryListResult)
-async def get_history(limit: int = 50):
-    items, total = cache.list_history(limit=limit)
+async def get_history(request: Request, limit: int = 50):
+    items, total = cache.list_history(_client_id(request), limit=limit)
     return HistoryListResult(items=items, total=total)
 
 
 @router.delete("/history", response_model=DeleteHistoryResult)
-async def delete_history(req: DeleteHistoryRequest):
+async def delete_history(req: DeleteHistoryRequest, request: Request):
     if not req.ids:
         raise HTTPException(status_code=400, detail="No ids provided")
-    deleted = cache.delete_history_items(req.ids)
+    deleted = cache.delete_history_items(req.ids, _client_id(request))
     return DeleteHistoryResult(deleted=deleted)
 
 
 @router.get("/history/{item_id}", response_model=HistoryDetail)
-async def get_history_detail(item_id: int):
-    item = cache.get_history_item(item_id)
+async def get_history_detail(item_id: int, request: Request):
+    item = cache.get_history_item(item_id, _client_id(request))
     if not item:
         raise HTTPException(status_code=404, detail="History item not found")
     return HistoryDetail(**item)

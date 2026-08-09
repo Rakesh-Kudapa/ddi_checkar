@@ -1,3 +1,4 @@
+import asyncio
 import json
 import httpx
 from backend.models.schemas import (
@@ -75,11 +76,20 @@ async def _call_anthropic(prompt: str, api_key: str) -> str:
 
 
 async def _call_gemini(prompt: str, api_key: str) -> str:
+    """Auth via the x-goog-api-key HEADER, not the ?key= query param.
+
+    Found 2026-08-08: a ?key=... query param ends up embedded in
+    httpx.HTTPStatusError's string representation (it includes the full
+    request URL), which then flowed straight into an HTTPException detail
+    shown to the user in the browser — the user's own real API key leaked
+    into the UI on any unhandled error status (confirmed via a live 503).
+    Headers never appear in that exception string, so this fixes the leak
+    at the source rather than just papering over it with redaction."""
     model = MODELS[LLMProvider.GEMINI]
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": api_key},
+            headers={"x-goog-api-key": api_key},
             json={
                 "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -124,12 +134,31 @@ _PROVIDER_CALLERS = {
     LLMProvider.GROK: _call_grok,
 }
 
+# 502/503/504 mean the provider itself is overloaded/unavailable, not that
+# anything is wrong with the request — Google's own docs describe 503 as
+# "model overloaded, retry the request." Reported live (2026-08-08): a
+# Gemini 503 surfaced straight to the user as a failed check with no retry
+# attempted. A short bounded retry resolves most of these transparently.
+_RETRYABLE_STATUS = {502, 503, 504}
+_RETRY_BACKOFF_SECONDS = [1, 3]
+
+
+async def _call_with_retry(caller, prompt: str, api_key: str) -> str:
+    for attempt, backoff in enumerate([*_RETRY_BACKOFF_SECONDS, None]):
+        try:
+            return await caller(prompt, api_key)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code not in _RETRYABLE_STATUS or backoff is None:
+                raise
+            await asyncio.sleep(backoff)
+    raise AssertionError("unreachable")  # loop always returns or raises
+
 
 async def _request_and_parse(provider: LLMProvider, api_key: str, prompt: str) -> dict:
     """Call the chosen provider and parse JSON. Retries once with a stricter prompt on parse failure."""
     caller = _PROVIDER_CALLERS[provider]
 
-    raw = await caller(prompt, api_key)
+    raw = await _call_with_retry(caller, prompt, api_key)
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -137,7 +166,7 @@ async def _request_and_parse(provider: LLMProvider, api_key: str, prompt: str) -
             "\n\nYour previous response was not valid JSON. "
             "Respond with ONLY the raw JSON object — no markdown fences, no commentary."
         )
-        raw_retry = await caller(stricter_prompt, api_key)
+        raw_retry = await _call_with_retry(caller, stricter_prompt, api_key)
         return json.loads(raw_retry)
 
 

@@ -88,6 +88,7 @@ def init_db():
                 sources_json     TEXT,
                 disclaimer       TEXT,
                 provider         TEXT,
+                client_id        TEXT,
                 created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -102,9 +103,22 @@ def init_db():
             ("resolved_at_b", "TEXT"),
             ("structure_at_a", "TEXT"),
             ("structure_at_b", "TEXT"),
+            # Per-browser isolation for a shared deployment (2026-08-09) — see
+            # CLAUDE.md. Rows saved before this column existed have client_id
+            # NULL, which never equals any real client_id in a "=?" filter,
+            # so old rows simply stop appearing to anyone rather than being
+            # attributed to the wrong browser. That's the correct fail-safe
+            # direction here: honest disappearance beats accidental exposure.
+            ("client_id", "TEXT"),
         ]:
             if col not in existing_cols:
                 c.execute(f"ALTER TABLE history ADD COLUMN {col} {coltype}")
+        # Must come after the migration loop above — on a pre-existing DB,
+        # client_id doesn't exist as a column until the ALTER TABLE just ran.
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_history_client
+            ON history (client_id)
+        """)
 
 def ensure_ddinter_loaded():
     """Idempotent: bulk-ingest the bundled DDInter CSVs into ddinter_reference
@@ -155,8 +169,13 @@ def get_verified_severity(drug_a: str, drug_b: str) -> str | None:
         ).fetchone()
     return row["level"] if row else None
 
-def save_history(result, provider: str) -> int:
-    """Persist a completed InteractionResult. Returns the new row id."""
+def save_history(result, provider: str, client_id: str) -> int:
+    """Persist a completed InteractionResult. Returns the new row id.
+
+    client_id is an opaque per-browser identifier (see CLAUDE.md's per-browser
+    isolation note) — not real authentication, just enough to keep casual
+    co-users of a shared deployed link from seeing each other's checks and
+    patient context by default."""
     with _conn() as c:
         cur = c.execute(
             """INSERT INTO history
@@ -166,8 +185,8 @@ def save_history(result, provider: str) -> int:
                 severity_comparison_json, action_convention_json, patient_context_json,
                 risk_level, mechanism, mechanism_type, targets_json, pathway,
                 clinical_effect, recommendation, llm_summary, sources_json,
-                disclaimer, provider)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                disclaimer, provider, client_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 result.drug_a.name, result.drug_b.name,
                 result.drug_a.standard_name, result.drug_b.standard_name,
@@ -185,37 +204,50 @@ def save_history(result, provider: str) -> int:
                 json.dumps(result.targets_involved), result.pathway,
                 result.clinical_effect, result.recommendation, result.llm_summary,
                 json.dumps([s.model_dump() for s in result.sources]),
-                result.disclaimer, provider,
+                result.disclaimer, provider, client_id,
             )
         )
         return cur.lastrowid
 
-def delete_history_items(ids: list[int]) -> int:
-    """Delete the given history rows. Returns the number actually deleted."""
+def delete_history_items(ids: list[int], client_id: str) -> int:
+    """Delete the given history rows, scoped to client_id so one browser
+    can't delete another's rows even by guessing/enumerating ids. Returns
+    the number actually deleted (may be less than len(ids) if some ids
+    didn't belong to this client_id — not an error, just quietly excluded)."""
     if not ids:
         return 0
     placeholders = ",".join("?" * len(ids))
     with _conn() as c:
-        cur = c.execute(f"DELETE FROM history WHERE id IN ({placeholders})", ids)
+        cur = c.execute(
+            f"DELETE FROM history WHERE id IN ({placeholders}) AND client_id=?",
+            (*ids, client_id)
+        )
         return cur.rowcount
 
-def list_history(limit: int = 50) -> tuple[list[dict], int]:
-    """Returns (items, total_row_count) — the total lets the UI show
-    "showing N of TOTAL" and offer a real "load more" instead of silently
-    truncating at whatever `limit` the frontend happens to hardcode."""
+def list_history(client_id: str, limit: int = 50) -> tuple[list[dict], int]:
+    """Returns (items, total_row_count) scoped to client_id — the total lets
+    the UI show "showing N of TOTAL" and offer a real "load more" instead of
+    silently truncating at whatever `limit` the frontend happens to hardcode."""
     with _conn() as c:
-        total = c.execute("SELECT COUNT(*) AS n FROM history").fetchone()["n"]
+        total = c.execute(
+            "SELECT COUNT(*) AS n FROM history WHERE client_id=?", (client_id,)
+        ).fetchone()["n"]
         rows = c.execute(
             """SELECT id, drug_a, drug_b, standard_a, standard_b, risk_level,
                       provider, created_at
-               FROM history ORDER BY id DESC LIMIT ?""",
-            (limit,)
+               FROM history WHERE client_id=? ORDER BY id DESC LIMIT ?""",
+            (client_id, limit)
         ).fetchall()
     return [dict(r) for r in rows], total
 
-def get_history_item(item_id: int) -> dict | None:
+def get_history_item(item_id: int, client_id: str) -> dict | None:
+    """Scoped to client_id — a request for another client's item id returns
+    None (surfaced as 404, same as a nonexistent id) rather than leaking
+    whether that id exists at all."""
     with _conn() as c:
-        row = c.execute("SELECT * FROM history WHERE id=?", (item_id,)).fetchone()
+        row = c.execute(
+            "SELECT * FROM history WHERE id=? AND client_id=?", (item_id, client_id)
+        ).fetchone()
     if not row:
         return None
     r = dict(row)

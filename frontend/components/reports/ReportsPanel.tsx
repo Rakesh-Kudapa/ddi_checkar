@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { HistorySummary, historyDetailToResult, deleteHistoryItems } from "../checker/HistoryList";
 import { InteractionResult, RiskLevel } from "../checker/ResultCard";
+import { clientIdHeader } from "../../lib/clientId";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8743";
 
@@ -35,7 +36,7 @@ export function ReportsPanel({ onView, refreshKey, onChanged }: ReportsPanelProp
 
   useEffect(() => {
     setLoadingMore(true);
-    fetch(`${API_BASE}/api/history?limit=${limit}`)
+    fetch(`${API_BASE}/api/history?limit=${limit}`, { headers: clientIdHeader() })
       .then((r) => r.json())
       .then((d) => { setItems(d.items); setTotal(d.total); })
       .catch(() => setItems([]))
@@ -48,7 +49,7 @@ export function ReportsPanel({ onView, refreshKey, onChanged }: ReportsPanelProp
   const allVisibleSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
 
   async function handleView(item: HistorySummary) {
-    const res = await fetch(`${API_BASE}/api/history/${item.id}`);
+    const res = await fetch(`${API_BASE}/api/history/${item.id}`, { headers: clientIdHeader() });
     if (!res.ok) return;
     const detail = await res.json();
     onView(item.drug_a, item.drug_b, historyDetailToResult(detail));

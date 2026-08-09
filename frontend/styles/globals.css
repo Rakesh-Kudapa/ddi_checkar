@@ -55,6 +55,7 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-si
 .check-btn{background:linear-gradient(135deg,#4f6ef7,#7c3aed);color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;font-family:var(--sans);transition:opacity .15s}
 .check-btn:hover{opacity:.88}
 .check-btn:disabled{opacity:.5;cursor:not-allowed}
+.check-btn.stop-btn{background:linear-gradient(135deg,#ef4444,#b91c1c)}
 .hint-warning{color:var(--warn);font-size:12px;margin:-6px 0 14px}
 .error-banner{background:#fef2f2;border:1px solid var(--danger);color:#991b1b;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:12px}
 
