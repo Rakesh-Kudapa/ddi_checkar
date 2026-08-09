@@ -306,6 +306,39 @@ context by default — without the much larger lift of real accounts/login. If t
 ever deployed somewhere an adversarial user (not just a casual co-user) could access it,
 this is not sufficient and real authentication would be needed instead.
 
+## Mobile Responsiveness (2026-08-10)
+
+After the first real deployment, the user reported the UI as "clumsy" on mobile. Root
+cause, found by checking rather than assuming: **no `<meta name="viewport">` tag existed
+anywhere** — Next.js does not add one automatically, and without it mobile browsers
+render at a virtual desktop-width viewport and shrink the whole page, forcing pinch-zoom
+and making everything look tiny. Added via `next/head` in `pages/_app.tsx` (applies to
+every page). This alone is usually the single biggest fix for "looks broken on phones."
+
+Beyond that, the existing `@media (max-width: 720px)` block in `globals.css` had real
+gaps that would still look broken even with the viewport tag fixed:
+- **TopBar had zero mobile handling** — logo + 4 nav tabs + 3 status badges in one 52px
+  row has no room on a phone width. Fixed: status badges (`.topbar-right`) hide on
+  mobile (full detail already lives on the Settings tab), nav tabs become a horizontally
+  scrollable strip (`overflow-x:auto`, `white-space:nowrap`) instead of wrapping/clipping.
+- **Sidebar became a tall vertical button stack** (3 modes + 5 quick pairs = 8 full-width
+  rows) that pushed all real page content below the fold on a phone. Fixed: converts to
+  a horizontally-scrollable strip instead, same pattern as the nav tabs.
+- Drug A/B in Pair Checker already stacked on mobile; the Check/Stop button now also
+  goes full-width there instead of staying content-sized and left-aligned, which read as
+  an afterthought under two full-width inputs on a touch screen.
+- Added `-webkit-overflow-scrolling: touch` to every horizontally-scrollable container
+  (nav tabs, sidebar, matrix/report tables) for smooth momentum scroll on iOS Safari, and
+  a defensive `html,body{overflow-x:hidden;max-width:100vw}` so nothing can force the
+  whole page to scroll sideways regardless of what a child element does.
+
+Verified: clean `tsc`, and confirmed via `curl` that the viewport meta tag actually
+renders in the server-sent HTML (what a mobile browser reads before any JS runs) — not
+just present in the JSX source. Not verified: an actual phone or browser dev-tools
+device emulator, since no browser automation tool was available this session. If mobile
+still looks off after this, the next debugging step is opening real dev-tools device
+emulation, which would catch anything this code-level pass missed.
+
 ## Architecture
 ```
 User input (drug names, optional patient context)

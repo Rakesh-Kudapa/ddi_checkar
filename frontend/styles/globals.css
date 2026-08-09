@@ -231,10 +231,52 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-si
 .mech-refs a{font-size:10px;color:var(--accent);text-decoration:none;border:1px solid var(--border);padding:2px 8px;border-radius:6px}
 .mech-refs a:hover{border-color:var(--accent)}
 
+/* Belt-and-suspenders: the page itself must never scroll horizontally,
+   regardless of what any child element does. */
+html,body{overflow-x:hidden;max-width:100vw}
+img,svg{max-width:100%}
+
 @media (max-width: 720px){
+  html,body{font-size:14px}
+
+  /* TOPBAR — logo + 4 nav tabs + 3 status badges has no room on a phone
+     width; previously had zero mobile handling and would visibly overflow
+     or clip. Badges move into Settings (already shown there in full);
+     nav tabs become a horizontally-scrollable strip instead of wrapping
+     or overflowing. */
+  .topbar{padding:0 10px;gap:8px}
+  .logo{font-size:13px;gap:5px}
+  .logo-tag{display:none}
+  .nav-tabs{margin-left:0;overflow-x:auto;-webkit-overflow-scrolling:touch;flex:1;scrollbar-width:none}
+  .nav-tabs::-webkit-scrollbar{display:none}
+  .nav-tab{white-space:nowrap;flex-shrink:0;padding:6px 10px}
+  .topbar-right{display:none}
+
+  /* LAYOUT / SIDEBAR — stacking the sidebar as a full vertical button list
+     (8 rows: 3 modes + 5 quick pairs) pushed all real content below the
+     fold. A horizontally-scrollable strip keeps navigation reachable
+     without burying the page underneath it. */
   .layout{flex-direction:column}
-  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border)}
-  .drug-row{grid-template-columns:1fr;}
+  .sidebar{
+    width:100%;border-right:none;border-bottom:1px solid var(--border);
+    display:flex;flex-direction:row;align-items:center;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;padding:8px 10px;gap:2px;
+  }
+  .sb-sec{flex-shrink:0;white-space:nowrap;padding:0 8px;display:flex;align-items:center}
+  .sb-btn{width:auto;flex-shrink:0;white-space:nowrap;padding:7px 12px;border-left:none;border-bottom:2px solid transparent}
+  .sb-btn.on{border-left-color:transparent;border-bottom-color:var(--accent)}
+  .main{padding:14px 12px}
+
+  /* PAIR CHECKER — Drug A/B already stack (grid-template-columns:1fr
+     below); make the Check/Stop button full-width too, since a
+     content-sized button left-aligned under two full-width inputs reads
+     as an afterthought on a touch screen. */
+  .drug-row{grid-template-columns:1fr}
   .vs{display:none}
+  .drug-row .check-btn{width:100%}
+
   .ig,.dp-grid,.set-grid,.stat-row{grid-template-columns:1fr}
+  .rh{padding:14px 16px;gap:10px}
+  .rh-icon{font-size:22px}
+  .matrix-wrap,.rpt-table-wrap{-webkit-overflow-scrolling:touch}
 }
