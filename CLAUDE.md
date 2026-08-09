@@ -465,10 +465,18 @@ ddi-checker/
 - Ports 8743/4127 were chosen specifically to avoid colliding with the user's other local
   projects (port 8000 in particular is taken by an unrelated project on this machine)
 
-## Deployment (prepared, not yet completed by the user)
+## Deployment (in progress — backend build was failing, now fixed)
 - Backend → **Render** (free web service tier): `render.yaml` blueprint already in repo.
   Build: `pip install -r requirements.txt`. Start: `uvicorn backend.main:app --host 0.0.0.0
   --port $PORT`. Set `ALLOWED_ORIGINS` env var to the Vercel URL once known.
+- **`.python-version` pins Python to `3.12`** (found/fixed 2026-08-09) — Render's default
+  Python for new services is 3.14.3, and `requirements.txt`'s `pydantic==2.7.1` (mid-2024)
+  has no prebuilt `pydantic-core` wheel for that version; `pydantic-core` is Rust, so pip
+  falls back to a source build that fails without a Rust toolchain in Render's standard
+  Python buildpack. This caused a fast, silent "Failed deploy" on the first real attempt.
+  Pinning to 3.12 (same version already verified working in local dev) is the safe fix —
+  upgrading `pydantic`/`fastapi` instead would also work but needs re-verification this
+  pin doesn't. If bumping the Python version here later, re-check this class of failure.
 - Frontend → **Vercel** (free tier): import repo, set **Root Directory to `frontend`**
   (this is a monorepo), set `NEXT_PUBLIC_API_BASE` env var to the Render backend URL.
 - Known, accepted tradeoff: Render's free tier has an **ephemeral filesystem** — the
